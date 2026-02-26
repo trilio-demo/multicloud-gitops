@@ -5,6 +5,13 @@ clusterGroup:
     config-demo:
     hello-world:
     golang-external-secrets:
+    trilio-system:
+  subscriptions:
+    trilio:
+      name: k8s-triliovault
+      namespace: trilio-system
+      channel: 5.2.x
+      source: certified-operators
   # The only subscription on spokes is gitops which gets managed by ACM
   # subscriptions:
   argoProjects:

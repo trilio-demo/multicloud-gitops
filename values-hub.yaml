@@ -7,12 +7,18 @@ clusterGroup:
     golang-external-secrets:
     config-demo:
     hello-world:
+    trilio-system:
   subscriptions:
     acm:
       name: advanced-cluster-management
       namespace: open-cluster-management
       channel: release-2.14
       # csv: advanced-cluster-management.v2.6.1
+    trilio:
+      name: k8s-triliovault
+      namespace: trilio-system
+      channel: 5.2.x
+      source: certified-operators
   argoProjects:
     - hub
     - config-demo
