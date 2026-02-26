@@ -1,0 +1,6 @@
+# Default values for Trilio chart
+trilio:
+  channel: "5.2.x"
+  instanceName: "{{ .Values.global.clusterName }}-{{ randAlphaNum 5 | lower }}"
+  namespace: trilio-system
+  # Add other TrilioVaultManager spec fields as needed

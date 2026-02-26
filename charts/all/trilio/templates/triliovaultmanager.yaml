@@ -1,0 +1,26 @@
+apiVersion: triliovault.trilio.io/v1
+kind: TrilioVaultManager
+metadata:
+  name: triliovault-manager
+  namespace: {{ .Values.trilio.namespace | default "trilio-system" }}
+spec:
+  applicationScope: Cluster
+  componentConfiguration:
+    ingress-controller:
+      enabled: false
+  dataJobResources:
+    requests:
+      cpu: 100m
+      memory: 800Mi
+  helmValues:
+    pollingIntervals:
+      manager: 30s
+      watcher: 30s
+      webSessionAccessTTL: 160h
+      webSessionMaxInactivityTTL: 24
+  logLevel: Info
+  metadataJobResources:
+    requests:
+      cpu: 10m
+      memory: 10Mi
+  tvkInstanceName: {{ .Values.trilio.instanceName | quote }}

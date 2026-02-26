@@ -1,0 +1,4 @@
+apiVersion: v2
+description: A Helm chart to deploy TrilioVaultManager and related resources
+name: trilio
+version: 0.1.0
