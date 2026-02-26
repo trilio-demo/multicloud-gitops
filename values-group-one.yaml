@@ -6,6 +6,8 @@ clusterGroup:
     hello-world:
     golang-external-secrets:
     trilio-system:
+      operatorGroup: true
+      targetNamespaces: []
   subscriptions:
     trilio:
       name: k8s-triliovault

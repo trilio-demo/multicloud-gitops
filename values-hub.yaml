@@ -8,6 +8,8 @@ clusterGroup:
     config-demo:
     hello-world:
     trilio-system:
+      operatorGroup: true
+      targetNamespaces: []
   subscriptions:
     acm:
       name: advanced-cluster-management
