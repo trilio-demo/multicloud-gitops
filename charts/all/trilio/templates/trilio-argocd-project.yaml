@@ -2,7 +2,7 @@ apiVersion: argoproj.io/v1alpha1
 kind: AppProject
 metadata:
   name: trilio
-  namespace: openshift-gitops
+  namespace: dallas-multicloudops-hub
 spec:
   destinations:
     - namespace: trilio-system
