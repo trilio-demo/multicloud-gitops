@@ -5,6 +5,8 @@ kind: License
 metadata:
   name: trilio-license
   namespace: trilio-system
+  labels:
+    trigger: "manual-sync"
 spec:
   key: {{ $license.data.key | b64dec | quote }}
 {{- end }}
