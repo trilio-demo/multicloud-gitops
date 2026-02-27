@@ -1,7 +1,7 @@
-# Product Requirements Document (PRD)
-
-## Title
+# Title
 Red Hat Validated Pattern: Disaster Recovery with Trilio
+
+# Product Requirements Document (PRD)
 
 ## Overview
 This document defines the requirements for a new Red Hat Validated Pattern focused on Disaster Recovery (DR) using Trilio. The pattern must adhere to the best practices and standards established by the Red Hat Validated Patterns framework, ensuring repeatability, security, and operational excellence for OpenShift-based DR solutions.
@@ -50,6 +50,17 @@ This document defines the requirements for a new Red Hat Validated Pattern focus
 - DR workflows (backup, restore, failover) are automated and validated.
 - Pattern passes all included Ansible validation playbooks.
 - Documentation is complete and follows Validated Patterns standards.
+
+## Implementation and Validation Matrix
+
+| Requirement | Implementation | Validation/Test Evidence | Status |
+|-------------|----------------|-------------------------|--------|
+| Trilio operator installed via OLM Subscription | ACM policy or Subscription YAML | Confirmed operator pod running in target namespace; Subscription and CSV present | Validated |
+| Trilio operand (TrilioVaultManager) installed via Helm | trilio-operand Helm chart (triliovaultmanager.yaml) | Helm release deployed; TVM CR present and reconciled | Validated |
+| Trilio license Secret created from value | values.yaml, ESO/Secret manifest | Secret appears in trilio-system namespace with correct key | Validated |
+| Trilio License CR created by Job when Secret exists | trilio-license-job.yaml, trilio-license-job-sa.yaml, trilio-license-job-role.yaml, trilio-license-job-rolebinding.yaml | Job runs, detects Secret, creates License CR; Trilio UI/API shows licensed | Validated |
+
+> Update this table as new requirements are implemented and validated.
 
 ## Operator Installation and Operand Management
 
