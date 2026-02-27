@@ -1,3 +1,5 @@
+{{- $license := (lookup "v1" "Secret" "trilio-system" "trilio-license") }}
+{{- if $license }}
 apiVersion: triliovault.trilio.io/v1
 kind: License
 metadata:
@@ -6,4 +8,5 @@ metadata:
   labels:
     trigger: "manual-sync"
 spec:
-  key: "FAKE-TRILIO-LICENSE-KEY-1234567890"
+  key: {{ $license.data.key | b64dec | quote }}
+{{- end }}
