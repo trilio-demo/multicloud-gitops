@@ -157,4 +157,40 @@ The `READY` column will flip from `False` to `True` within seconds. Once the `aw
 This same technique works for any ExternalSecret in the pattern (e.g., `trilio-license`).
 
 ---
+
+## Extracting the Vault Root Token from the Pattern Secret
+
+The VP framework stores Vault init data (including the root token) in a Secret named `vaultkeys` in the `imperative` namespace. The secret has a single key `vault_data_json` containing a base64-encoded JSON blob — not a flat key like `root_token`.
+
+**Correct extraction command:**
+
+```bash
+VAULT_TOKEN=$(oc get secret vaultkeys -n imperative \
+  -o jsonpath='{.data.vault_data_json}' | \
+  base64 -d | \
+  python3 -c "import sys,json; print(json.load(sys.stdin)['root_token'])")
+echo $VAULT_TOKEN
+```
+
+**Why not `jsonpath='{.data.root_token}'`?** That path doesn't exist. The entire JSON payload is nested inside a single base64 field, so you must decode the field first, then parse the JSON.
+
+---
+
+## Updating Vault Secrets via `oc exec` (No Local Vault CLI Required)
+
+Once you have the root token (see above), write plain text secrets directly into Vault using `oc exec` against the `vault-0` pod:
+
+```bash
+oc exec -n vault vault-0 -- \
+  env VAULT_TOKEN=$VAULT_TOKEN \
+  vault kv put secret/global/trilio-s3 \
+    accessKey="AKIAXXXXXXXXXXXXXXXX" \
+    secretKey="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+```
+
+**Plain text only — do not base64-encode the values.** ESO reads raw Vault values and handles the Kubernetes Secret base64 encoding itself. If you store base64-encoded values (e.g. keys ending in `==`), ESO double-encodes them and Trilio receives garbled credentials, causing the Target CR to stay in `Failed` state.
+
+After updating Vault, force an immediate ESO re-sync (see "Forcing Immediate ESO Re-Sync" above) rather than waiting the full 5 minutes.
+
+---
 *Update this file as new insights are discovered or existing patterns are refined.*

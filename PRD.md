@@ -75,7 +75,7 @@ Each item maps to a deliverable in the Implementation Matrix below.
 |---|-------------|----------|
 | 1 | Deploy Trilio via Validated Pattern (OLM + Helm) | P0 — Done |
 | 2 | Deploy a sample stateful application via Helm (WordPress + MySQL) | P0 — Done |
-| 3 | Define a BackupTarget CR on all clusters (shared S3 or NFS storage) | P0 — Not Started |
+| 3 | Define a BackupTarget CR on all clusters (shared S3 or NFS storage) | P0 — Done |
 | 4 | Define a BackupPlan CR scoped to the sample app namespace, with quiesce/unquiesce hooks | P0 — Not Started |
 | 5 | Execute a Backup of the sample app via Ansible playbook | P0 — Not Started (playbook exists, untested) |
 | 6 | Restore the app from a Backup to a different cluster, triggered by a defined event | P1 — Not Started |
@@ -90,8 +90,10 @@ Each item maps to a deliverable in the Implementation Matrix below.
 ### Req 2 — Sample App (WordPress + MySQL) ✓ DONE
 Custom Helm chart at `charts/all/wordpress/` built from owner's existing manifests. Preserves `app: wordpress` / `tier: mysql` / `tier: frontend` labels (required for Trilio hook selectors). Replaces manual `oc adm policy add-scc-to-user anyuid` with a declarative ServiceAccount + RoleBinding. NodePort replaced with ClusterIP + OpenShift Route. Deployed to `wordpress` namespace on hub (primary) cluster via ArgoCD. Validated 2026-03-04.
 
-### Req 3 — BackupTarget CR (All Clusters)
-Trilio cannot back up to nowhere. A `BackupTarget` CR must be defined on **every cluster** (hub and spokes) pointing to shared storage — an S3 bucket is preferred for portability. Storage credentials must come from Vault via ESO. The BackupTarget must reach `Available` state before backup or restore operations can proceed.
+### Req 3 — BackupTarget CR (All Clusters) ✓ DONE
+`trilio-s3-target` Target CR deployed in `trilio-system` on hub cluster via `charts/all/trilio-operand`. S3 credentials (`accessKey`/`secretKey`) stored in Vault at `secret/global/trilio-s3` as plain text; ESO ExternalSecret `trilio-s3-credentials` syncs them into `aws-s3-login` Secret within 5 minutes. BackupTarget reached `Available` state after correct credentials were stored. EventTarget annotation (`trilio.io/event-target: "true"`) set on all clusters. Bucket: `sa-demo-2`, region: `us-east-1`. Validated 2026-03-04.
+
+> **Note:** Credentials must be plain text in Vault — base64-encoded values cause double-encoding by ESO and result in a `Failed` Target state. See Learnings.md for the correct `oc exec` extraction and write commands.
 
 ### Req 4 — BackupPlan with Quiesce/Unquiesce Hooks
 The BackupPlan must reference the WordPress namespace. Quiesce/unquiesce hooks are required to achieve a crash-consistent MySQL backup — hooks run before/after snapshot to drain in-flight writes. Owner has existing hook manifests that can be contributed.
@@ -219,7 +221,9 @@ All pattern bootstrap and operational tooling runs inside the **Red Hat Validate
 | README with architecture diagram and troubleshooting | README.md (Mermaid diagram, troubleshooting section) | Diagram renders in GitHub; troubleshooting covers all major failure scenarios | Validated |
 | DR validation playbook | ansible/playbooks/validate-trilio.yaml | Playbook runs end-to-end against real cluster: CSV Succeeded, TVM Deployed, License CR present, all pods Running | Validated |
 | values-group-one.yaml spoke application path correct | values-group-one.yaml | ArgoCD syncs trilio-operand chart to spoke cluster | Validated |
-| BackupTarget CR on all clusters (S3, credentials from Vault) | charts/all/trilio-operand: backup-target.yaml (Target CR) + backup-target-secret.yaml (ExternalSecret → aws-s3-login Secret from secret/global/trilio-s3); EventTarget annotation set to "true" on all clusters | BackupTarget reaches `Available` state; EventTarget pod running in trilio-system | Not Tested |
+| S3 credentials stored in Vault (`secret/global/trilio-s3`) | Plain text `accessKey` + `secretKey` written to Vault via `oc exec -n vault vault-0` using root token from `vaultkeys` secret in `imperative` namespace | Vault KV entry confirmed; ESO ExternalSecret `trilio-s3-credentials` synced and `aws-s3-login` Secret created in `trilio-system` within 5 minutes | Validated 2026-03-04 |
+| `aws-s3-login` OCP Secret created by ESO from Vault | ExternalSecret `trilio-s3-credentials` in `charts/all/trilio-operand/templates/backup-target-secret.yaml`; refreshInterval: 5m | Secret `aws-s3-login` present in `trilio-system` with correct plain text `accessKey` and `secretKey` fields | Validated 2026-03-04 |
+| BackupTarget CR on all clusters (S3, credentials from Vault) | charts/all/trilio-operand: backup-target.yaml (Target CR) + backup-target-secret.yaml (ExternalSecret → aws-s3-login Secret from secret/global/trilio-s3); EventTarget annotation set to "true" on all clusters | BackupTarget `trilio-s3-target` reached `Available` state in `trilio-system`; EventTarget annotation present | Validated 2026-03-04 |
 | Sample app: WordPress + MySQL via Helm | charts/all/wordpress (custom chart from existing manifests; ServiceAccount + anyuid RoleBinding; ClusterIP + Route) | Deployed to `wordpress` namespace via ArgoCD on hub cluster; pods Running; Route accessible (2026-03-04) | Validated |
 | BackupPlan CR scoped to WordPress namespace | TBD — Helm chart or Ansible | BackupPlan reaches `Available`; hooks defined for MySQL quiesce/unquiesce | Not Started |
 | Quiesce/unquiesce hooks for MySQL | TBD — Hook CRs (owner has existing manifests) | Hooks run before/after snapshot; no data corruption in restore | Not Started |
