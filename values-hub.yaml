@@ -83,6 +83,9 @@ clusterGroup:
       namespace: trilio-system
       argoProject: trilio-operand
       path: charts/all/trilio-operand
+      overrides:
+        - name: backupTarget.bucketName
+          value: sa-demo-2
     wordpress:
       name: wordpress
       namespace: wordpress
