@@ -4,3 +4,13 @@ trilio:
   instanceName: "{{ .Values.global.clusterName }}-{{ randAlphaNum 5 | lower }}"
   namespace: trilio-system
   # Add other TrilioVaultManager spec fields as needed
+
+# BackupTarget: S3-compatible object store for Trilio backups.
+# Credentials (accessKey, secretKey) are pulled from Vault via ESO:
+#   secret/global/trilio-s3  { accessKey: "...", secretKey: "..." }
+# Override bucketName and region in values-hub.yaml / values-group-one.yaml
+# or via helmOverrides in the application entry.
+backupTarget:
+  bucketName: ""
+  region: us-east-1
+  enableBrowsing: true

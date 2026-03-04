@@ -28,7 +28,8 @@ The following must be satisfied on **every cluster** (hub and spokes) before dep
 |---------------|--------|
 | OpenShift 4.x | Any supported OCP 4.x release |
 | CSI StorageClass (default) | A CSI-backed StorageClass must exist and be marked as the cluster default. Trilio uses the CSI snapshot API to protect PVCs — non-CSI storage (in-tree drivers, `kubernetes.io/no-provisioner`) is not supported. **ODF (`ocs-storagecluster-ceph-rbd`) is the recommended choice on OpenShift** but any CSI driver is acceptable (AWS EBS CSI, Azure Disk CSI, vSphere CSI, etc.). |
-| S3-compatible object storage | Required for the BackupTarget CR. Credentials must be available in Vault for ESO to sync. Any S3-compatible endpoint works (AWS S3, ODF NooBaa MCG, MinIO, etc.). |
+| S3-compatible object storage | Required for the BackupTarget CR. Store credentials in Vault at `secret/global/trilio-s3` with properties `accessKey` and `secretKey`. Any S3-compatible endpoint works (AWS S3, ODF NooBaa MCG, MinIO, etc.). Set `bucketName` and `region` in `values-hub.yaml` via `helmOverrides` on the `trilio-operand` application. |
+| `values-secret.yaml` populated before `make install` | The VP bootstrap process writes secrets to Vault **before** ArgoCD syncs. If Vault is not populated before sync, the Trilio license Job and BackupTarget will fail until secrets are available. See `values-secret.yaml.template` for required entries and `Learnings.md` for recovery steps. |
 
 > **ODF Note:** ODF must be installed and configured **before** running `pattern.sh make install`. The VP does not install ODF — it has hardware requirements (minimum 3 nodes with attached block devices) that vary by environment. On RHPDS clusters, ODF is typically pre-installed. On OpenMetal or bare-metal OCP, install ODF separately via the ODF operator and create a `StorageSystem`/`StorageCluster` before deploying this pattern.
 
@@ -73,7 +74,7 @@ Each item maps to a deliverable in the Implementation Matrix below.
 | # | Requirement | Priority |
 |---|-------------|----------|
 | 1 | Deploy Trilio via Validated Pattern (OLM + Helm) | P0 — Done |
-| 2 | Deploy a sample stateful application via Helm (WordPress + MySQL) | P0 — In Progress |
+| 2 | Deploy a sample stateful application via Helm (WordPress + MySQL) | P0 — Done |
 | 3 | Define a BackupTarget CR on all clusters (shared S3 or NFS storage) | P0 — Not Started |
 | 4 | Define a BackupPlan CR scoped to the sample app namespace, with quiesce/unquiesce hooks | P0 — Not Started |
 | 5 | Execute a Backup of the sample app via Ansible playbook | P0 — Not Started (playbook exists, untested) |
@@ -86,8 +87,8 @@ Each item maps to a deliverable in the Implementation Matrix below.
 
 ## Detailed Requirement Notes
 
-### Req 2 — Sample App (WordPress + MySQL)
-Use `bitnami/wordpress` Helm chart (or equivalent). MySQL provides a meaningful stateful workload that exercises Trilio backup hooks. Owner has existing manifests (non-Helm) that can be adapted into a Helm chart. App should be deployed to its own namespace (e.g., `wordpress`) and managed via ArgoCD.
+### Req 2 — Sample App (WordPress + MySQL) ✓ DONE
+Custom Helm chart at `charts/all/wordpress/` built from owner's existing manifests. Preserves `app: wordpress` / `tier: mysql` / `tier: frontend` labels (required for Trilio hook selectors). Replaces manual `oc adm policy add-scc-to-user anyuid` with a declarative ServiceAccount + RoleBinding. NodePort replaced with ClusterIP + OpenShift Route. Deployed to `wordpress` namespace on hub (primary) cluster via ArgoCD. Validated 2026-03-04.
 
 ### Req 3 — BackupTarget CR (All Clusters)
 Trilio cannot back up to nowhere. A `BackupTarget` CR must be defined on **every cluster** (hub and spokes) pointing to shared storage — an S3 bucket is preferred for portability. Storage credentials must come from Vault via ESO. The BackupTarget must reach `Available` state before backup or restore operations can proceed.
@@ -218,8 +219,8 @@ All pattern bootstrap and operational tooling runs inside the **Red Hat Validate
 | README with architecture diagram and troubleshooting | README.md (Mermaid diagram, troubleshooting section) | Diagram renders in GitHub; troubleshooting covers all major failure scenarios | Validated |
 | DR validation playbook | ansible/playbooks/validate-trilio.yaml | Playbook runs end-to-end against real cluster: CSV Succeeded, TVM Deployed, License CR present, all pods Running | Validated |
 | values-group-one.yaml spoke application path correct | values-group-one.yaml | ArgoCD syncs trilio-operand chart to spoke cluster | Validated |
-| BackupTarget CR on all clusters (S3/NFS, credentials from Vault) | TBD — trilio-operand Helm chart or standalone manifest | BackupTarget reaches `Available` state on all clusters | Not Started |
-| Sample app: WordPress + MySQL via Helm | TBD — bitnami/wordpress chart in charts/all/wordpress | App deployed to `wordpress` namespace; pods Running; Route accessible | Not Started |
+| BackupTarget CR on all clusters (S3, credentials from Vault) | charts/all/trilio-operand: backup-target.yaml (Target CR) + backup-target-secret.yaml (ExternalSecret → aws-s3-login Secret from secret/global/trilio-s3); EventTarget annotation set to "true" on all clusters | BackupTarget reaches `Available` state; EventTarget pod running in trilio-system | Not Tested |
+| Sample app: WordPress + MySQL via Helm | charts/all/wordpress (custom chart from existing manifests; ServiceAccount + anyuid RoleBinding; ClusterIP + Route) | Deployed to `wordpress` namespace via ArgoCD on hub cluster; pods Running; Route accessible (2026-03-04) | Validated |
 | BackupPlan CR scoped to WordPress namespace | TBD — Helm chart or Ansible | BackupPlan reaches `Available`; hooks defined for MySQL quiesce/unquiesce | Not Started |
 | Quiesce/unquiesce hooks for MySQL | TBD — Hook CRs (owner has existing manifests) | Hooks run before/after snapshot; no data corruption in restore | Not Started |
 | DR backup workflow playbook (tested) | ansible/playbooks/dr-backup.yaml | Playbook runs against real cluster; Backup CR reaches `Available` | Not Tested |
