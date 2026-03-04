@@ -1,0 +1,177 @@
+---
+# dr-restore.yaml
+#
+# Creates a Trilio Restore CR from a named Backup, polls until Completed,
+# and optionally validates that restored application pods are Running.
+#
+# Trilio CRs involved:
+#   Restore  - references a Backup CR and restores all resources captured in it
+#
+# Usage:
+#   ansible-playbook ansible/playbooks/dr-restore.yaml \
+#     -e source_backup=my-app-backup-01 \
+#     -e restore_name=my-app-restore-01 \
+#     -e restore_namespace=my-app
+#
+# Required variables:
+#   source_backup:      name of the Backup CR to restore from
+#   restore_name:       name for the new Restore CR
+#   restore_namespace:  namespace where the Backup CR lives (and where resources restore to)
+#
+# Optional variables:
+#   trilio_namespace:   namespace where Trilio is installed (default: trilio-system)
+#   timeout_seconds:    polling timeout in seconds (default: 1800)
+#   validate_pods:      if true, check restored pods come up Running (default: true)
+
+- name: Trigger Trilio DR restore
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    trilio_namespace: trilio-system
+    timeout_seconds: 1800
+    validate_pods: true
+
+  pre_tasks:
+    - name: Assert required variables are set
+      ansible.builtin.assert:
+        that:
+          - source_backup is defined
+          - restore_name is defined
+          - restore_namespace is defined
+        fail_msg: "Required variables missing: source_backup, restore_name, restore_namespace"
+
+  tasks:
+
+    # -------------------------------------------------------------------------
+    # 1. Run pre-flight validation first
+    # -------------------------------------------------------------------------
+    - name: Confirm Trilio is healthy before attempting restore
+      ansible.builtin.include_tasks: _validate_trilio_ready.yaml
+
+    # -------------------------------------------------------------------------
+    # 2. Verify the source Backup exists and is Available
+    # -------------------------------------------------------------------------
+    - name: Get source Backup CR
+      kubernetes.core.k8s_info:
+        api_version: triliovault.trilio.io/v1
+        kind: Backup
+        name: "{{ source_backup }}"
+        namespace: "{{ restore_namespace }}"
+      register: backup_result
+      failed_when: >
+        backup_result.resources | length == 0 or
+        (backup_result.resources[0].status.status | default('')) != 'Available'
+
+    - name: Show source Backup details
+      ansible.builtin.debug:
+        msg: >
+          Source Backup: {{ source_backup }}
+          Status: {{ backup_result.resources[0].status.status }}
+          Created: {{ backup_result.resources[0].metadata.creationTimestamp }}
+
+    # -------------------------------------------------------------------------
+    # 3. Create Restore CR
+    #    The Restore CR references the source Backup and instructs Trilio to
+    #    recreate all captured resources (Deployments, Services, PVCs, ConfigMaps,
+    #    etc.) into the target namespace.
+    #
+    #    Presentation note: Trilio restores the *entire* namespace state as of
+    #    the backup timestamp — both stateless (Deployments) and stateful (PVCs)
+    #    resources. The restore can target the original namespace (in-place) or
+    #    a different namespace (migration / DR failover).
+    # -------------------------------------------------------------------------
+    - name: Create Restore CR
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: triliovault.trilio.io/v1
+          kind: Restore
+          metadata:
+            name: "{{ restore_name }}"
+            namespace: "{{ restore_namespace }}"
+          spec:
+            source:
+              type: Backup
+              backup:
+                name: "{{ source_backup }}"
+                namespace: "{{ restore_namespace }}"
+            restoreNamespace: "{{ restore_namespace }}"
+            skipIfAlreadyExists: true
+      register: restore_result
+
+    - name: Show Restore CR created
+      ansible.builtin.debug:
+        msg: "Restore CR {{ restore_name }} created. Waiting for completion..."
+
+    # -------------------------------------------------------------------------
+    # 4. Poll Restore status until Completed or Failed
+    # -------------------------------------------------------------------------
+    - name: Wait for Restore to complete
+      kubernetes.core.k8s_info:
+        api_version: triliovault.trilio.io/v1
+        kind: Restore
+        name: "{{ restore_name }}"
+        namespace: "{{ restore_namespace }}"
+      register: restore_status
+      until: >
+        restore_status.resources | length > 0 and
+        (restore_status.resources[0].status.status | default('')) in ['Completed', 'Failed']
+      retries: "{{ (timeout_seconds | int / 10) | int }}"
+      delay: 10
+
+    - name: Assert Restore succeeded
+      ansible.builtin.assert:
+        that:
+          - restore_status.resources[0].status.status == 'Completed'
+        fail_msg: >
+          Restore {{ restore_name }} FAILED.
+          Status: {{ restore_status.resources[0].status | to_nice_json }}
+        success_msg: "Restore {{ restore_name }} completed successfully."
+
+    # -------------------------------------------------------------------------
+    # 5. (Optional) Validate restored pods come up Running
+    #    This is the end-to-end "application is actually healthy" check —
+    #    confirming the data path, not just the Kubernetes object creation.
+    # -------------------------------------------------------------------------
+    - name: Validate restored pods are Running
+      when: validate_pods | bool
+      block:
+
+        - name: Wait for pods in {{ restore_namespace }} to reach Running state
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            namespace: "{{ restore_namespace }}"
+          register: pods_result
+          until: >
+            pods_result.resources | length > 0 and
+            pods_result.resources
+              | selectattr('status.phase', 'equalto', 'Running')
+              | list | length == pods_result.resources | length
+          retries: 30
+          delay: 10
+          failed_when: pods_result.resources | length == 0
+
+        - name: Assert all restored pods are Running
+          ansible.builtin.assert:
+            that:
+              - >
+                pods_result.resources
+                  | selectattr('status.phase', 'equalto', 'Running')
+                  | list | length == pods_result.resources | length
+            fail_msg: >
+              Not all pods are Running after restore in {{ restore_namespace }}:
+              {{ pods_result.resources
+                 | rejectattr('status.phase', 'equalto', 'Running')
+                 | map(attribute='metadata.name') | list }}
+            success_msg: >
+              PASS: All {{ pods_result.resources | length }} pods in
+              {{ restore_namespace }} are Running after restore.
+
+    - name: Restore workflow complete
+      ansible.builtin.debug:
+        msg: >
+          PASS: Restore {{ restore_name }} complete.
+          Namespace {{ restore_namespace }} is operational.

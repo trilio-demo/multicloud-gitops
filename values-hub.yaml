@@ -10,6 +10,7 @@ clusterGroup:
     trilio-system:
       operatorGroup: true
       targetNamespaces: []
+    wordpress:
   subscriptions:
     acm:
       name: advanced-cluster-management
@@ -26,6 +27,7 @@ clusterGroup:
     - config-demo
     - hello-world
     - trilio-operand
+    - wordpress
   # Explicitly mention the cluster-state based overrides we plan to use for this pattern.
   # We can use self-referential variables because the chart calls the tpl function with these variables defined
   sharedValueFiles:
@@ -81,6 +83,11 @@ clusterGroup:
       namespace: trilio-system
       argoProject: trilio-operand
       path: charts/all/trilio-operand
+    wordpress:
+      name: wordpress
+      namespace: wordpress
+      argoProject: wordpress
+      path: charts/all/wordpress
   imperative:
     # NOTE: We *must* use lists and not hashes. As hashes lose ordering once parsed by helm
     # The default schedule is every 10 minutes: imperative.schedule

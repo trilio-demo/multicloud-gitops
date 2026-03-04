@@ -20,6 +20,20 @@ The pattern must work against any reachable OpenShift cluster, including RHPDS d
 
 ---
 
+## Pre-Requisites
+
+The following must be satisfied on **every cluster** (hub and spokes) before deploying this pattern. The `validate-trilio.yaml` playbook checks these conditions and fails fast with a clear message if any are not met.
+
+| Pre-Requisite | Detail |
+|---------------|--------|
+| OpenShift 4.x | Any supported OCP 4.x release |
+| CSI StorageClass (default) | A CSI-backed StorageClass must exist and be marked as the cluster default. Trilio uses the CSI snapshot API to protect PVCs — non-CSI storage (in-tree drivers, `kubernetes.io/no-provisioner`) is not supported. **ODF (`ocs-storagecluster-ceph-rbd`) is the recommended choice on OpenShift** but any CSI driver is acceptable (AWS EBS CSI, Azure Disk CSI, vSphere CSI, etc.). |
+| S3-compatible object storage | Required for the BackupTarget CR. Credentials must be available in Vault for ESO to sync. Any S3-compatible endpoint works (AWS S3, ODF NooBaa MCG, MinIO, etc.). |
+
+> **ODF Note:** ODF must be installed and configured **before** running `pattern.sh make install`. The VP does not install ODF — it has hardware requirements (minimum 3 nodes with attached block devices) that vary by environment. On RHPDS clusters, ODF is typically pre-installed. On OpenMetal or bare-metal OCP, install ODF separately via the ODF operator and create a `StorageSystem`/`StorageCluster` before deploying this pattern.
+
+---
+
 ## Requirements
 
 ### General
@@ -196,6 +210,7 @@ All pattern bootstrap and operational tooling runs inside the **Red Hat Validate
 
 | Requirement | Implementation | Validation/Test Evidence | Status |
 |-------------|----------------|-------------------------|--------|
+| Default CSI StorageClass present on all clusters | Pre-requisite (not installed by VP); validated by playbook | `validate-trilio.yaml` task 0 asserts default StorageClass exists with CSI provisioner; fails fast with install guidance if absent | Validated in playbook |
 | Trilio operator installed via OLM Subscription | ACM policy or Subscription YAML | Confirmed operator pod running in target namespace; Subscription and CSV present | Validated |
 | Trilio operand (TrilioVaultManager) installed via Helm | trilio-operand Helm chart (triliovaultmanager.yaml) | Helm release deployed; TVM CR present and reconciled | Validated |
 | Trilio license Secret created from Vault via ESO | values.yaml, ESO/Secret manifest | Secret appears in trilio-system namespace with correct key | Validated |
