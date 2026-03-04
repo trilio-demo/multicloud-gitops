@@ -6,18 +6,28 @@ Red Hat Validated Pattern: Disaster Recovery with Trilio
 ## Overview
 This document defines the requirements for a new Red Hat Validated Pattern focused on Disaster Recovery (DR) using Trilio. The pattern must adhere to the best practices and standards established by the Red Hat Validated Patterns framework, ensuring repeatability, security, and operational excellence for OpenShift-based DR solutions.
 
+The pattern must work against any reachable OpenShift cluster, including RHPDS demo clusters, OpenMetal, and customer environments — with no environment-specific manual steps.
+
+---
+
 ## Objectives
 - Deliver a fully automated, GitOps-driven DR solution for OpenShift clusters using Trilio.
 - Ensure the pattern is modular, reusable, and aligns with the Validated Patterns methodology.
 - Provide clear documentation, automation, and integration with common tools (ArgoCD, Helm, Ansible).
 - Enable rapid deployment, testing, and validation of DR capabilities in enterprise environments.
+- Support Annual DR Test scenarios triggered by a defined operational event, not just manual runbook execution.
+- Demonstrate accelerated RTO via Trilio's EventTarget / Continuous Restore capability (pre-staged PVCs on the DR cluster).
+
+---
 
 ## Requirements
+
 ### General
 - Must follow the [Red Hat Validated Patterns best practices](https://github.com/validatedpatterns/multicloud-gitops#best-practices).
 - All automation, configuration, and documentation must be delivered as code in Git.
 - Pattern must be compatible with OpenShift 4.x and support multi-cluster topologies.
 - All resources must be managed declaratively (GitOps-first approach).
+- Must be portable across RHPDS, OpenMetal, and any OCP cluster without environment-specific customization.
 
 ### Disaster Recovery Specific
 - Deploy and configure Trilio operator and operands (e.g., TrilioVaultManager) using Helm charts.
@@ -39,17 +49,148 @@ This document defines the requirements for a new Red Hat Validated Pattern focus
 - Provide links to upstream Trilio documentation and Red Hat Validated Patterns resources.
 - Include example values files for different topologies (hub, spoke, standalone).
 
+---
+
+## End-to-End DR Workflow Requirements
+
+These are the functional requirements that define the complete scope of the pattern.
+Each item maps to a deliverable in the Implementation Matrix below.
+
+| # | Requirement | Priority |
+|---|-------------|----------|
+| 1 | Deploy Trilio via Validated Pattern (OLM + Helm) | P0 — Done |
+| 2 | Deploy a sample stateful application via Helm (WordPress + MySQL) | P0 — In Progress |
+| 3 | Define a BackupTarget CR on all clusters (shared S3 or NFS storage) | P0 — Not Started |
+| 4 | Define a BackupPlan CR scoped to the sample app namespace, with quiesce/unquiesce hooks | P0 — Not Started |
+| 5 | Execute a Backup of the sample app via Ansible playbook | P0 — Not Started (playbook exists, untested) |
+| 6 | Restore the app from a Backup to a different cluster, triggered by a defined event | P1 — Not Started |
+| 6a | Transform the restored app post-restore (e.g., patch Route/Ingress hostname) | P1 — Not Started |
+| 7 | Continuous Restore via EventTarget: pre-stage PVCs on DR cluster from ConsistentBackupPlan for accelerated RTO | P1 — Not Started |
+| 8 | (Optional) Deploy a VM-based application (OpenShift Virtualization) | P2 — Deferred |
+
+---
+
+## Detailed Requirement Notes
+
+### Req 2 — Sample App (WordPress + MySQL)
+Use `bitnami/wordpress` Helm chart (or equivalent). MySQL provides a meaningful stateful workload that exercises Trilio backup hooks. Owner has existing manifests (non-Helm) that can be adapted into a Helm chart. App should be deployed to its own namespace (e.g., `wordpress`) and managed via ArgoCD.
+
+### Req 3 — BackupTarget CR (All Clusters)
+Trilio cannot back up to nowhere. A `BackupTarget` CR must be defined on **every cluster** (hub and spokes) pointing to shared storage — an S3 bucket is preferred for portability. Storage credentials must come from Vault via ESO. The BackupTarget must reach `Available` state before backup or restore operations can proceed.
+
+### Req 4 — BackupPlan with Quiesce/Unquiesce Hooks
+The BackupPlan must reference the WordPress namespace. Quiesce/unquiesce hooks are required to achieve a crash-consistent MySQL backup — hooks run before/after snapshot to drain in-flight writes. Owner has existing hook manifests that can be contributed.
+
+### Req 5 — Backup Execution
+`dr-backup.yaml` Ansible playbook exists but is untested. Must be validated against a real cluster with the WordPress app running and a BackupTarget defined.
+
+### Req 6 — Cross-Cluster Restore (Standard Path)
+The restore playbook (`dr-restore.yaml`) must be parameterized for a target cluster kubeconfig/context. The target cluster must have Trilio installed (via this pattern) and a BackupTarget CR pointing to the same storage as the source. In this path, Trilio fetches both metadata and data from the BackupTarget — RTO is bounded by data transfer time. The trigger for restore should be a defined operational event (e.g., an `ansible-navigator run` invoked from a CI/CD pipeline, ACM policy, or documented runbook command).
+
+### Req 6a — Post-Restore Transform
+Trilio's `Transform` CRD allows patching resources during restore (e.g., replacing the Route hostname with the DR-site hostname, updating StorageClass references). A sample Transform CR must be provided and wired into the restore playbook so the app is immediately accessible after restore without manual intervention.
+
+### Req 7 — Continuous Restore via EventTarget (Accelerated RTO Path)
+
+**This is the architectural differentiator of the pattern.**
+
+#### How It Works
+1. The `BackupTarget` CR on the **DR cluster** is flagged as an EventTarget.
+2. This flag causes Trilio to create an **EventTarget pod** in the `trilio-system` namespace on the DR cluster.
+3. The EventTarget pod periodically monitors the shared BackupTarget storage for new backups.
+4. When a new backup is detected, the EventTarget pod **pre-stages PVCs** on the DR cluster — the actual volume data is copied locally, ahead of any restore request.
+5. The number of pre-staged restore points is controlled by the `consistentSets` count on the BackupTarget.
+6. When a DR event triggers a restore, Trilio only needs to **fetch metadata** from the BackupTarget (not the full dataset) — the PVC data is already local.
+7. Result: dramatically reduced RTO compared to the standard restore path (Req 6).
+
+#### Implementation Requirements
+- BackupTarget CR must be defined on ALL clusters (source and DR), pointing to the same shared storage.
+- The DR cluster's BackupTarget CR must have the EventTarget flag set.
+- A `ConsistentBackupPlan` must be defined to group all application namespaces into atomic snapshots — the EventTarget uses these as the unit of pre-staging.
+- The `consistentSets` count should be configurable (default: 2–3 restore points retained on the DR cluster).
+- The restore playbook (`dr-restore.yaml`) must be capable of targeting the pre-staged Consistent Set, not just a named Backup.
+- The Annual DR Test workflow should use this path to demonstrate accelerated RTO.
+
+#### Architecture Diagram (Continuous Restore Flow)
+```
+Source Cluster                        Shared Storage (S3)
+─────────────                         ────────────────────
+BackupPlan + Hooks                    BackupTarget (S3)
+    │                                      ▲  │
+    │  creates Backup CR                   │  │ new backup detected
+    ▼                                      │  ▼
+Backup (ConsistentSet) ──writes──────────►│  EventTarget pod polls
+                                          │  (on DR cluster)
+                                          │        │
+DR Cluster                                │        │ pre-stages PVCs
+─────────────                             │        ▼
+BackupTarget (same S3) ◄──metadata only──┘  PVCs pre-staged locally
+EventTarget flag set                              │
+EventTarget pod running                           │ DR Test triggered
+                                                  ▼
+                                         Restore CR (metadata fetch only)
+                                                  │
+                                                  ▼
+                                         App running with local PVC data
+                                         + Transform applied (Route/Ingress)
+```
+
+### Req 8 — VM Application (Deferred)
+OpenShift Virtualization (KubeVirt/CNV) adds significant complexity (operator, DataVolumes, potentially build pipelines). A simple RHEL or Fedora appliance VM avoids Windows licensing friction. Deferred to a future iteration; flagged as a stretch goal for customer POC demos. If implemented, the VM should be brought up in a `stopped` state post-restore so the operator can verify before starting.
+
+---
+
 ## References
 - [Red Hat Validated Patterns: multicloud-gitops](https://github.com/validatedpatterns/multicloud-gitops)
 - [Red Hat Validated Patterns: config-demo](https://github.com/validatedpatterns/config-demo)
 - [Trilio for Kubernetes Documentation](https://docs.trilio.io/kubernetes/)
+- [Trilio BackupPlan Hooks](https://docs.trilio.io/kubernetes/architecture/apis-and-command-line-reference/custom-resource-definitions-application-1/triliovaultmanager#hooks)
+- [Trilio Transform CRD](https://docs.trilio.io/kubernetes/architecture/apis-and-command-line-reference/custom-resource-definitions-application-1/triliovaultmanager#transform)
+- [Trilio ConsistentBackupPlan](https://docs.trilio.io/kubernetes/architecture/apis-and-command-line-reference/custom-resource-definitions-application-1/triliovaultmanager#consistentbackupplan)
+- [Trilio EventTarget / Continuous Restore](https://docs.trilio.io/kubernetes/)
+
+---
 
 ## Acceptance Criteria
-- Pattern deploys successfully via ArgoCD with minimal manual intervention.
+- Pattern deploys successfully via ArgoCD with minimal manual intervention on any OCP 4.x cluster.
 - Trilio operator and operands are fully functional and licensed.
-- DR workflows (backup, restore, failover) are automated and validated.
+- WordPress sample app is deployed via Helm and managed by ArgoCD.
+- BackupTarget CR is defined on all clusters and reaches `Available` state.
+- BackupPlan with quiesce/unquiesce hooks is defined and validated for the WordPress namespace.
+- Backup playbook (`dr-backup.yaml`) runs successfully against a real cluster.
+- Standard restore playbook (`dr-restore.yaml`) completes on a separate cluster.
+- Post-restore Transform is applied and verified (Route/Ingress hostname updated).
+- EventTarget flag is set on DR cluster BackupTarget; EventTarget pod is running.
+- ConsistentBackupPlan is defined and PVCs are pre-staged on DR cluster.
+- DR Test restore completes from pre-staged Consistent Set (metadata-only fetch from BackupTarget).
 - Pattern passes all included Ansible validation playbooks.
 - Documentation is complete and follows Validated Patterns standards.
+
+---
+
+## Execution Environment: Validated Patterns Utility Container
+
+All pattern bootstrap and operational tooling runs inside the **Red Hat Validated Patterns standard utility container**, invoked via `pattern.sh`. This eliminates local toolchain dependencies and ensures reproducible execution across environments (developer laptops, CI/CD pipelines, RHPDS demo clusters).
+
+**Container image:** `quay.io/validatedpatterns/utility-container` (maintained by the VP team)
+
+**Included tooling:**
+
+| Tool | Purpose in this Pattern |
+|------|------------------------|
+| `oc` / `kubectl` | Interact with OpenShift/Kubernetes API |
+| `helm` | Deploy operand Helm charts (trilio-operand, etc.) |
+| `ansible` + `ansible-navigator` | Run DR validation and workflow playbooks |
+| `kubernetes.core` Ansible collection | `k8s` and `k8s_info` modules used in all playbooks |
+| `git` | Clone and manage pattern repository |
+| `make` | Drive pattern lifecycle targets (`install`, `upgrade`, etc.) |
+| `python3` + `pip` | Runtime for Ansible and Kubernetes SDK |
+| `jq` / `yq` | JSON/YAML manipulation in scripts |
+| `podman` | Container runtime for the utility container itself |
+
+**Extension point:** If additional Ansible collections are required (e.g. future playbooks), add an `ansible/requirements.yml` file — the framework installs declared collections automatically at runtime without requiring a custom container image.
+
+---
 
 ## Implementation and Validation Matrix
 
@@ -57,10 +198,43 @@ This document defines the requirements for a new Red Hat Validated Pattern focus
 |-------------|----------------|-------------------------|--------|
 | Trilio operator installed via OLM Subscription | ACM policy or Subscription YAML | Confirmed operator pod running in target namespace; Subscription and CSV present | Validated |
 | Trilio operand (TrilioVaultManager) installed via Helm | trilio-operand Helm chart (triliovaultmanager.yaml) | Helm release deployed; TVM CR present and reconciled | Validated |
-| Trilio license Secret created from value | values.yaml, ESO/Secret manifest | Secret appears in trilio-system namespace with correct key | Validated |
-| Trilio License CR created by Job when Secret exists | trilio-license-job.yaml, trilio-license-job-sa.yaml, trilio-license-job-role.yaml, trilio-license-job-rolebinding.yaml | Job runs, detects Secret, creates License CR; Trilio UI/API shows licensed | Validated |
+| Trilio license Secret created from Vault via ESO | values.yaml, ESO/Secret manifest | Secret appears in trilio-system namespace with correct key | Validated |
+| Trilio License CR created by Job when Secret exists | trilio-license-job.yaml + RBAC manifests | Job runs, detects Secret, creates License CR; Trilio UI/API shows licensed | Validated |
+| README with architecture diagram and troubleshooting | README.md (Mermaid diagram, troubleshooting section) | Diagram renders in GitHub; troubleshooting covers all major failure scenarios | Validated |
+| DR validation playbook | ansible/playbooks/validate-trilio.yaml | Playbook runs end-to-end against real cluster: CSV Succeeded, TVM Deployed, License CR present, all pods Running | Validated |
+| values-group-one.yaml spoke application path correct | values-group-one.yaml | ArgoCD syncs trilio-operand chart to spoke cluster | Validated |
+| BackupTarget CR on all clusters (S3/NFS, credentials from Vault) | TBD — trilio-operand Helm chart or standalone manifest | BackupTarget reaches `Available` state on all clusters | Not Started |
+| Sample app: WordPress + MySQL via Helm | TBD — bitnami/wordpress chart in charts/all/wordpress | App deployed to `wordpress` namespace; pods Running; Route accessible | Not Started |
+| BackupPlan CR scoped to WordPress namespace | TBD — Helm chart or Ansible | BackupPlan reaches `Available`; hooks defined for MySQL quiesce/unquiesce | Not Started |
+| Quiesce/unquiesce hooks for MySQL | TBD — Hook CRs (owner has existing manifests) | Hooks run before/after snapshot; no data corruption in restore | Not Started |
+| DR backup workflow playbook (tested) | ansible/playbooks/dr-backup.yaml | Playbook runs against real cluster; Backup CR reaches `Available` | Not Tested |
+| DR restore workflow playbook — standard path | ansible/playbooks/dr-restore.yaml | Restore CR reaches `Completed` on separate cluster; pods Running | Not Tested |
+| Cross-cluster restore (parameterized for target cluster) | ansible/playbooks/dr-restore.yaml (kubeconfig param) | Restore completes on separate cluster using shared BackupTarget storage | Not Started |
+| Post-restore Transform (Route/Ingress hostname patch) | TBD — Transform CR + restore playbook integration | Route hostname updated to DR-site value post-restore | Not Started |
+| ConsistentBackupPlan (multi-app atomic backup) | TBD — ConsistentBackupPlan CR | Multi-namespace backup completes atomically | Not Started |
+| EventTarget flag on DR cluster BackupTarget | BackupTarget CR (eventTarget: true) on DR cluster | EventTarget pod running in trilio-system on DR cluster | Not Started |
+| PVC pre-staging via EventTarget pod | Automatic (driven by EventTarget pod monitoring BackupTarget) | PVCs visible on DR cluster after new backup detected; data local | Not Started |
+| Accelerated restore from pre-staged Consistent Set | ansible/playbooks/dr-restore.yaml (ConsistentSet target) | Restore completes with metadata-only fetch; significantly faster than standard path | Not Started |
+| DR trigger mechanism (Annual DR Test) | TBD — documented runbook or ACM scheduled policy invoking dr-test.yaml | DR test invocable by single command or automated trigger | Not Started |
+| (Optional) VM-based application | Deferred — OpenShift Virtualization / KubeVirt | VM restores in stopped state; operator verifies before starting | Deferred |
 
 > Update this table as new requirements are implemented and validated.
+
+---
+
+## Ansible Playbook Responsibilities
+
+`site.yaml` is the RHPDS bootstrap shim only — it runs `pattern.sh make install` and is not the DR workflow coordinator.
+
+| Playbook | Role | Status |
+|----------|------|--------|
+| `ansible/site.yaml` | RHPDS bootstrap (pattern install) | Done |
+| `ansible/playbooks/validate-trilio.yaml` | Pre-flight health check (CSV, TVM, License, pods) | Validated |
+| `ansible/playbooks/dr-backup.yaml` | Create BackupPlan + Backup CR, poll to completion | Exists, untested |
+| `ansible/playbooks/dr-restore.yaml` | Create Restore CR, poll to completion, apply Transform, validate pods | Exists, untested |
+| `ansible/playbooks/dr-test.yaml` | Annual DR Test — backup + pre-staged restore + transform end-to-end | Not Started |
+
+---
 
 ## Operator Installation and Operand Management
 
