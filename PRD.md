@@ -77,8 +77,8 @@ Each item maps to a deliverable in the Implementation Matrix below.
 | 1 | Deploy Trilio via Validated Pattern (OLM + Helm) | P0 — Done |
 | 2 | Deploy a sample stateful application via Helm (WordPress + MySQL) | P0 — Done |
 | 3 | Define a BackupTarget CR on all clusters (shared S3 or NFS storage) | P0 — Done |
-| 4 | Define a BackupPlan CR scoped to the sample app namespace, with quiesce/unquiesce hooks | P0 — Not Started |
-| 5 | Execute a Backup of the sample app via Ansible playbook | P0 — Not Started (playbook exists, untested) |
+| 4 | Define a BackupPlan CR scoped to the sample app namespace, with quiesce/unquiesce hooks | P0 — Done |
+| 5 | Execute a Backup of the sample app via Ansible playbook | P0 — In Progress (manual backup validated; Ansible playbook untested) |
 | 6 | Restore the app from a Backup to a different cluster, triggered by a defined event | P1 — Not Started |
 | 6a | Transform the restored app post-restore (e.g., patch Route/Ingress hostname) | P1 — Not Started |
 | 7 | Continuous Restore via EventTarget: pre-stage PVCs on DR cluster from ConsistentBackupPlan for accelerated RTO | P1 — Not Started |
@@ -96,11 +96,11 @@ Custom Helm chart at `charts/all/wordpress/` built from owner's existing manifes
 
 > **Note:** Credentials must be plain text in Vault — base64-encoded values cause double-encoding by ESO and result in a `Failed` Target state. See Learnings.md for the correct `oc exec` extraction and write commands.
 
-### Req 4 — BackupPlan with Quiesce/Unquiesce Hooks
-The BackupPlan must reference the WordPress namespace. Quiesce/unquiesce hooks are required to achieve a crash-consistent MySQL backup — hooks run before/after snapshot to drain in-flight writes. Owner has existing hook manifests that can be contributed.
+### Req 4 — BackupPlan with Quiesce/Unquiesce Hooks ✓ DONE
+`wordpress-backup-plan` BackupPlan CR deployed via `charts/all/wordpress/templates/backup-plan.yaml`. Protects entire `wordpress` namespace (`backupPlanComponents: {}`). References `trilio-s3-target` in `trilio-system`. MySQL quiesce/unquiesce Hook CR (`wordpress-mysql-hook`) deployed via `charts/all/wordpress/templates/backup-hook.yaml` in the `wordpress` namespace — hook runs `FLUSH TABLES WITH READ LOCK` before snapshot and `FLUSH LOGS; UNLOCK TABLES` after. Hook applied to pods matching `wordpress-mysql*` selector. BackupPlan and Hook deployed via ArgoCD; manual backup confirmed successful. Validated 2026-03-05.
 
 ### Req 5 — Backup Execution
-`dr-backup.yaml` Ansible playbook exists but is untested. Must be validated against a real cluster with the WordPress app running and a BackupTarget defined.
+Manual backup triggered via Trilio UI/API confirmed successful against a real cluster with WordPress running and BackupTarget `Available`. Next step: validate the `dr-backup.yaml` Ansible playbook end-to-end to replace manual trigger with an auditable, repeatable automation.
 
 ### Req 6 — Cross-Cluster Restore (Standard Path)
 The restore playbook (`dr-restore.yaml`) must be parameterized for a target cluster kubeconfig/context. The target cluster must have Trilio installed (via this pattern) and a BackupTarget CR pointing to the same storage as the source. In this path, Trilio fetches both metadata and data from the BackupTarget — RTO is bounded by data transfer time. The trigger for restore should be a defined operational event (e.g., an `ansible-navigator run` invoked from a CI/CD pipeline, ACM policy, or documented runbook command).
@@ -226,9 +226,9 @@ All pattern bootstrap and operational tooling runs inside the **Red Hat Validate
 | `aws-s3-login` OCP Secret created by ESO from Vault | ExternalSecret `trilio-s3-credentials` in `charts/all/trilio-operand/templates/backup-target-secret.yaml`; refreshInterval: 5m | Secret `aws-s3-login` present in `trilio-system` with correct plain text `accessKey` and `secretKey` fields | Validated 2026-03-04 |
 | BackupTarget CR on all clusters (S3, credentials from Vault) | charts/all/trilio-operand: backup-target.yaml (Target CR) + backup-target-secret.yaml (ExternalSecret → aws-s3-login Secret from secret/global/trilio-s3); EventTarget annotation set to "true" on all clusters | BackupTarget `trilio-s3-target` reached `Available` state in `trilio-system`; EventTarget annotation present | Validated 2026-03-04 |
 | Sample app: WordPress + MySQL via Helm | charts/all/wordpress (custom chart from existing manifests; ServiceAccount + anyuid RoleBinding; ClusterIP + Route) | Deployed to `wordpress` namespace via ArgoCD on hub cluster; pods Running; Route accessible (2026-03-04) | Validated |
-| BackupPlan CR scoped to WordPress namespace | TBD — Helm chart or Ansible | BackupPlan reaches `Available`; hooks defined for MySQL quiesce/unquiesce | Not Started |
-| Quiesce/unquiesce hooks for MySQL | TBD — Hook CRs (owner has existing manifests) | Hooks run before/after snapshot; no data corruption in restore | Not Started |
-| DR backup workflow playbook (tested) | ansible/playbooks/dr-backup.yaml | Playbook runs against real cluster; Backup CR reaches `Available` | Not Tested |
+| BackupPlan CR scoped to WordPress namespace | charts/all/wordpress/templates/backup-plan.yaml — BackupPlan `wordpress-backup-plan` protecting full `wordpress` namespace via `backupPlanComponents: {}`; references `trilio-s3-target` | BackupPlan deployed via ArgoCD; manual backup completed successfully | Validated 2026-03-05 |
+| Quiesce/unquiesce hooks for MySQL | charts/all/wordpress/templates/backup-hook.yaml — Hook CR `wordpress-mysql-hook` in `wordpress` namespace; pre: `FLUSH TABLES WITH READ LOCK`; post: `FLUSH LOGS; UNLOCK TABLES`; selector: `wordpress-mysql*` | Hook deployed via ArgoCD; executed as part of manual backup run | Validated 2026-03-05 |
+| DR backup workflow playbook (tested) | ansible/playbooks/dr-backup.yaml | Playbook runs against real cluster; Backup CR reaches `Available` | In Progress — manual backup validated; Ansible playbook untested |
 | DR restore workflow playbook — standard path | ansible/playbooks/dr-restore.yaml | Restore CR reaches `Completed` on separate cluster; pods Running | Not Tested |
 | Cross-cluster restore (parameterized for target cluster) | ansible/playbooks/dr-restore.yaml (kubeconfig param) | Restore completes on separate cluster using shared BackupTarget storage | Not Started |
 | Post-restore Transform (Route/Ingress hostname patch) | TBD — Transform CR + restore playbook integration | Route hostname updated to DR-site value post-restore | Not Started |
@@ -251,7 +251,7 @@ All pattern bootstrap and operational tooling runs inside the **Red Hat Validate
 |----------|------|--------|
 | `ansible/site.yaml` | RHPDS bootstrap (pattern install) | Done |
 | `ansible/playbooks/validate-trilio.yaml` | Pre-flight health check (CSV, TVM, License, pods) | Validated |
-| `ansible/playbooks/dr-backup.yaml` | Create BackupPlan + Backup CR, poll to completion | Exists, untested |
+| `ansible/playbooks/dr-backup.yaml` | Create BackupPlan + Backup CR, poll to completion | Exists; manual backup validated 2026-03-05; playbook untested |
 | `ansible/playbooks/dr-restore.yaml` | Create Restore CR, poll to completion, apply Transform, validate pods | Exists, untested |
 | `ansible/playbooks/dr-test.yaml` | Annual DR Test — backup + pre-staged restore + transform end-to-end | Not Started |
 
