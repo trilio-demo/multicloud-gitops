@@ -20,7 +20,7 @@ clusterGroup:
     trilio:
       name: k8s-triliovault
       namespace: trilio-system
-      channel: 5.2.x
+      channel: 5.3.x
       source: certified-operators
   argoProjects:
     - hub

@@ -193,4 +193,16 @@ oc exec -n vault vault-0 -- \
 After updating Vault, force an immediate ESO re-sync (see "Forcing Immediate ESO Re-Sync" above) rather than waiting the full 5 minutes.
 
 ---
+
+## ArgoCD Uses `helm template`, Not `helm install` — Impact on Trilio App Discovery
+
+ArgoCD's default behavior is to render Helm charts using `helm template` and apply the resulting YAML via `kubectl apply`. It does **not** run `helm install`, so no Helm release Secret (`sh.helm.release.v1.*`) is ever created in the namespace.
+
+Trilio's Helm application discovery works by scanning for these release Secrets. Because ArgoCD never creates them, ArgoCD-managed apps will not appear as "Helm applications" in the Trilio UI — even if they were deployed from a Helm chart.
+
+**This does not affect backup protection.** The `BackupPlan` with `backupPlanComponents: {}` protects the entire namespace regardless of how the resources were deployed. Trilio backs up PVCs, Deployments, Services, and all other resources directly — the "Helm app" grouping in the Trilio UI is only a discovery convenience, not a protection requirement.
+
+**Talking point:** This is a natural consequence of GitOps — ArgoCD owns the desired state, not Helm. The Helm chart is just a templating mechanism; the resulting Kubernetes objects are what matter, and Trilio protects those directly.
+
+---
 *Update this file as new insights are discovered or existing patterns are refined.*

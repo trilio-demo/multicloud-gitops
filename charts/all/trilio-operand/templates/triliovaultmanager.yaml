@@ -22,4 +22,4 @@ spec:
     requests:
       cpu: 10m
       memory: 10Mi
-  tvkInstanceName: {{ .Values.trilio.instanceName | quote }}
+  tvkInstanceName: {{ tpl .Values.trilio.instanceName . | quote }}

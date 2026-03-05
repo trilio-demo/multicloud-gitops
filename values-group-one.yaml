@@ -12,7 +12,7 @@ clusterGroup:
     trilio:
       name: k8s-triliovault
       namespace: trilio-system
-      channel: 5.2.x
+      channel: 5.3.x
       source: certified-operators
   # The only subscription on spokes is gitops which gets managed by ACM
   # subscriptions:
