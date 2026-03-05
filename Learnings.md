@@ -205,4 +205,25 @@ Trilio's Helm application discovery works by scanning for these release Secrets.
 **Talking point:** This is a natural consequence of GitOps — ArgoCD owns the desired state, not Helm. The Helm chart is just a templating mechanism; the resulting Kubernetes objects are what matter, and Trilio protects those directly.
 
 ---
+
+## ArgoCD: Sync Status vs. Last Sync Result
+
+These are two independent indicators that are frequently confused:
+
+| Field | What it measures | Example values |
+|-------|-----------------|----------------|
+| **Sync Status** | Is the live cluster state currently **equal to** what the chart renders from Git? | `Synced`, `OutOfSync` |
+| **Last Sync Result** | Did the most recent **sync operation** (apply) complete without error? | `Sync OK`, `Sync Failed` |
+
+**They can disagree — and that's meaningful:**
+
+- `OutOfSync` + `Sync OK` (what we saw): ArgoCD successfully applied the chart the last time it ran, but the live cluster has since **drifted** from the desired state. Common causes: a manual `oc patch`, an operator mutating a field, or a new commit that rendered a different value (our case — `tvkInstanceName` was empty in the last-applied annotation, but the cluster had `tvk-instance` from a prior manual patch).
+
+- `Synced` + `Sync Failed`: The apply operation errored (e.g. RBAC denied, CRD missing), but a previous successful sync left the cluster in a state that still matches an older desired state.
+
+**Talking point:** "Sync OK" only means the last *operation* worked — it says nothing about whether the cluster matches Git *right now*. Always check **Sync Status** to know the true reconciliation state. In a GitOps system, `OutOfSync` is the signal that something has deviated from source of truth, regardless of when the last apply ran.
+
+**In this pattern:** The `tvkInstanceName` OutOfSync was caused by `global.clusterName` (undefined in the VP framework) rendering as an empty string in the last-applied annotation, while a prior manual `oc patch` had set the live value to `tvk-instance`. ArgoCD's sync policy is to apply the desired state — it does not silently ignore live mutations. The fix (using `global.localClusterName`) produced a non-empty desired value that ArgoCD could authoritatively apply, resolving the drift.
+
+---
 *Update this file as new insights are discovered or existing patterns are refined.*
