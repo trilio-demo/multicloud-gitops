@@ -101,7 +101,7 @@
       register: tvm_result
       until: >
         tvm_result.resources | length > 0 and
-        (tvm_result.resources[0].status.status | default('')) == 'Deployed'
+        (tvm_result.resources[0].status.status | default('')) in ['Deployed', 'Updated']
       retries: "{{ (timeout_seconds | int / 10) | int }}"
       delay: 10
       failed_when: tvm_result.resources | length == 0
@@ -111,7 +111,7 @@
         msg: >
           TVM: {{ tvm_result.resources[0].metadata.name }}
           Status: {{ tvm_result.resources[0].status.status | default('unknown') }}
-          (expected: Deployed)
+          (expected: Deployed or Updated)
 
     # -------------------------------------------------------------------------
     # 3. License: confirm License CR exists

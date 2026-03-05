@@ -226,4 +226,19 @@ These are two independent indicators that are frequently confused:
 **In this pattern:** The `tvkInstanceName` OutOfSync was caused by `global.clusterName` (undefined in the VP framework) rendering as an empty string in the last-applied annotation, while a prior manual `oc patch` had set the live value to `tvk-instance`. ArgoCD's sync policy is to apply the desired state — it does not silently ignore live mutations. The fix (using `global.localClusterName`) produced a non-empty desired value that ArgoCD could authoritatively apply, resolving the drift.
 
 ---
+
+## TrilioVaultManager Healthy States: `Deployed` and `Updated`
+
+TVM has two terminal healthy states:
+
+| Status | Meaning |
+|--------|---------|
+| `Deployed` | Initial deployment completed successfully |
+| `Updated` | A spec change was applied and reconciled successfully |
+
+Both indicate the operator is running and Trilio is fully functional. `Updated` appears after any spec change (e.g. `tvkInstanceName` change) and persists until the next spec change — it does not revert to `Deployed`.
+
+**Impact:** Validation playbooks that only check for `Deployed` will loop indefinitely on a healthy but recently-updated TVM. Both `_validate_trilio_ready.yaml` and `validate-trilio.yaml` accept either state using `in ['Deployed', 'Updated']`.
+
+---
 *Update this file as new insights are discovered or existing patterns are refined.*

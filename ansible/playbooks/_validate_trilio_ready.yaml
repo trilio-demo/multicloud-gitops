@@ -27,4 +27,4 @@
   register: _preflight_tvm
   failed_when: >
     _preflight_tvm.resources | length == 0 or
-    (_preflight_tvm.resources[0].status.status | default('')) != 'Deployed'
+    (_preflight_tvm.resources[0].status.status | default('')) not in ['Deployed', 'Updated']
