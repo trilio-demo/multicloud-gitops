@@ -93,7 +93,7 @@ Each item maps to a deliverable in the Implementation Matrix below.
 | 6 | Restore from Backup via Ansible playbook (backup method) | P1 — Done |
 | 6 | Restore from BackupTarget location browse (location method) | P1 — Not Tested |
 | 6a | Route hostname transform inline in Restore CR via transformComponents | P1 — Done |
-| 6b | Post-restore MySQL Hook CR (wordpress-restore-hook) for wp_options URL rewrite | P1 — Not Started |
+| 6b | Post-restore MySQL Hook CR (wordpress-restore-hook) for wp_options URL rewrite | P1 — Partial (manual deploy works; GitOps automation pending via 6c) |
 | 6c | DR restore namespace (wordpress-restore) + Hook CR pre-provisioned via GitOps on all clusters | P1 — Not Started |
 | 7 | Continuous Restore via EventTarget: pre-stage PVCs on DR cluster from ConsistentBackupPlan for accelerated RTO | P1 — Not Started |
 | 8 | (Optional) Deploy a VM-based application (OpenShift Virtualization) | P2 — Deferred |
@@ -124,6 +124,8 @@ The Restore CR's `transformComponents` field rewrites resource fields during res
 
 ### Req 6b — Post-Restore MySQL Hook (WordPress URL Rewrite)
 A Trilio `Hook` CR (`wordpress-restore-hook`) must be pre-deployed in the restore namespace before the restore starts. The post-restore hook updates the MySQL `wp_options` table (`siteurl` and `home`) to the DR cluster URL, ensuring WordPress internal links resolve correctly after failover. This Hook CR is separate from the backup quiesce/unquiesce hook and must be deployed to every DR restore namespace (via ArgoCD or manual apply). The restore playbook detects the Hook CR automatically — if absent, restore proceeds without it (demo mode) with a warning.
+
+**Status (2026-03-06):** Validated — hook executes correctly post-restore when manually pre-deployed to the restore namespace. GitOps automation of the Hook CR deployment (Req 6c) is pending.
 
 ### Req 6c — DR Restore Namespace Pre-Provisioning (All Clusters)
 The WordPress restore namespace (`wordpress-restore`) and its prerequisites must be provisioned automatically by the Validated Pattern on all clusters — not created manually before a DR event. This must be managed declaratively via ArgoCD so it exists and is ready before any restore is triggered.
@@ -260,7 +262,7 @@ All pattern bootstrap and operational tooling runs inside the **Red Hat Validate
 | DR restore from location browse (location method) | ansible/playbooks/dr-restore.yaml `-e restore_method=location`; path auto-extracted from Backup CR `status.location` or supplied manually | Restore CR `Completed` | Not Tested |
 | Cross-cluster restore (parameterized for target cluster) | ansible/playbooks/dr-restore.yaml (kubeconfig param) | Restore completes on separate cluster using shared BackupTarget storage | Not Started |
 | Post-restore Route transform (hostname patch) | dr-restore.yaml `transformComponents` — `{{ restore_namespace }}.{{ ingress_domain }}`; ingress domain auto-discovered from `config.openshift.io/v1 Ingress/cluster`; no separate Transform CR needed | Route hostname updated inline during restore | Validated 2026-03-06 |
-| Post-restore MySQL Hook (wp_options URL rewrite) | wordpress-restore-hook Hook CR pre-deployed in restore namespace; dr-restore.yaml detects and includes in hookConfig if present | MySQL wp_options siteurl/home updated to DR URL post-restore | Not Started |
+| Post-restore MySQL Hook (wp_options URL rewrite) | wordpress-restore-hook Hook CR pre-deployed in restore namespace; dr-restore.yaml detects and includes in hookConfig if present | MySQL wp_options siteurl/home updated to DR URL post-restore | Validated manually 2026-03-06; GitOps automation pending (Req 6c) |
 | wordpress-restore namespace + RBAC pre-provisioned via GitOps | New Helm chart or extension to wordpress chart; deployed to all clusters via ArgoCD | wordpress-restore NS + Hook CR + RBAC exist on DR cluster before restore | Not Started |
 | ConsistentBackupPlan (multi-app atomic backup) | TBD — ConsistentBackupPlan CR | Multi-namespace backup completes atomically | Not Started |
 | EventTarget flag on DR cluster BackupTarget | BackupTarget CR (eventTarget: true) on DR cluster | EventTarget pod running in trilio-system on DR cluster | Not Started |
