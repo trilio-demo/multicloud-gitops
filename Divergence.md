@@ -28,21 +28,19 @@ This document tracks any significant divergence between the Product Requirements
 
 ### 3. PRD: Documentation
 - **PRD Reference**: "Must include a comprehensive README with architecture diagrams, deployment steps, and troubleshooting."
-- **Observed Divergence**: README.md exists, but may lack architecture diagrams and detailed troubleshooting.
-- **Rationale/Context**: Initial focus was on automation and code; documentation can be expanded.
-- **Remediation Plan**: 
-	- Add architecture diagrams (e.g., PNG/SVG or Mermaid) to README.md to illustrate the pattern's components and flow.
-	- Expand the troubleshooting section with common issues, error messages, and solutions.
-	- Review PRD.md and ensure all documentation requirements are reflected in README.md.
+- **Observed Divergence**: ~~README.md exists, but may lack architecture diagrams and detailed troubleshooting.~~ **RESOLVED**
+- **Rationale/Context**: README.md now includes a Mermaid architecture diagram, component table, deployment steps, DR workflow usage, and a troubleshooting section covering operator, TVM, license, ArgoCD sync, and backup failure scenarios.
+- **Remediation Plan**: N/A — resolved.
 
 ### 4. PRD: Ansible Validation Playbooks
 - **PRD Reference**: "Provide sample DR policies, backup/restore workflows, and validation playbooks."
-- **Observed Divergence**: Ansible playbooks exist, but coverage of DR policies and backup/restore workflows may be limited.
-- **Rationale/Context**: Playbooks focus on pattern validation, not full DR workflow automation.
-- **Remediation Plan**: 
-	- Develop additional Ansible playbooks to automate and validate DR scenarios, including backup and restore workflows.
-	- Reference these playbooks in documentation and ensure they are tested as part of CI or manual validation.
-	- Solicit feedback from users and stakeholders to prioritize playbook coverage and improvements.
+- **Observed Divergence**: ~~Ansible playbooks exist, but coverage of DR policies and backup/restore workflows may be limited.~~ **RESOLVED**
+- **Rationale/Context**: Three playbooks added under `ansible/playbooks/`:
+  - `validate-trilio.yaml` — pre-flight health check (CSV, TVM, License CR, pods)
+  - `dr-backup.yaml` — creates BackupPlan + Backup CR, polls to completion
+  - `dr-restore.yaml` — creates Restore CR, polls to completion, optionally validates pods
+  - `_validate_trilio_ready.yaml` — shared pre-flight task file included by backup/restore
+- **Remediation Plan**: N/A — resolved. Future work: schedule-based backup automation, multi-cluster failover playbook.
 
 ---
 

@@ -34,6 +34,17 @@ The following must be satisfied on **every cluster** (hub and spokes) before dep
 
 > **ODF Note:** ODF must be installed and configured **before** running `pattern.sh make install`. The VP does not install ODF — it has hardware requirements (minimum 3 nodes with attached block devices) that vary by environment. On RHPDS clusters, ODF is typically pre-installed. On OpenMetal or bare-metal OCP, install ODF separately via the ODF operator and create a `StorageSystem`/`StorageCluster` before deploying this pattern.
 
+### Restore Pre-Requisites
+
+The following must be known or provisioned before running the `dr-restore.yaml` playbook. These are in addition to the cluster-level pre-requisites above.
+
+| Pre-Requisite | Detail |
+|---------------|--------|
+| Cluster ingress domain | **Auto-discovered** by the restore playbook from the DR cluster (`config.openshift.io/v1 Ingress/cluster`). Used to construct the Route hostname as `{{ restore_namespace }}.{{ ingress_domain }}` (e.g. `wordpress-restore.apps.ocp-dc6.demo.presales.trilio.io`). No manual input required — the playbook queries the cluster it is currently authenticated to. Override with `-e cluster_domain=<value>` only if auto-discovery is unavailable. |
+| `restore_namespace` pre-created | The target namespace must exist before the restore starts. Trilio does not create it. Automated via Req 6c (GitOps); until then, create manually: `oc new-project wordpress-restore` |
+| `wordpress-restore-hook` Hook CR | Must be pre-deployed in `restore_namespace` for MySQL URL rewrite to run post-restore (Req 6b). If absent, the playbook warns and proceeds without it. Automated via Req 6c (GitOps); until then, apply manually from `ansible/playbooks/` or the `charts/all/wordpress-restore/` chart. |
+| Shared BackupTarget reachable | The DR cluster's BackupTarget CR must point to the same S3 bucket as the source cluster and be in `Available` state. |
+
 ---
 
 ## Requirements
@@ -79,8 +90,11 @@ Each item maps to a deliverable in the Implementation Matrix below.
 | 3 | Define a BackupTarget CR on all clusters (shared S3 or NFS storage) | P0 — Done |
 | 4 | Define a BackupPlan CR scoped to the sample app namespace, with quiesce/unquiesce hooks | P0 — Done |
 | 5 | Execute a Backup of the sample app via Ansible playbook | P0 — Done |
-| 6 | Restore the app from a Backup to a different cluster, triggered by a defined event | P1 — Not Started |
-| 6a | Transform the restored app post-restore (e.g., patch Route/Ingress hostname) | P1 — Not Started |
+| 6 | Restore from Backup via Ansible playbook (backup method) | P1 — Done |
+| 6 | Restore from BackupTarget location browse (location method) | P1 — Not Tested |
+| 6a | Route hostname transform inline in Restore CR via transformComponents | P1 — Done |
+| 6b | Post-restore MySQL Hook CR (wordpress-restore-hook) for wp_options URL rewrite | P1 — Not Started |
+| 6c | DR restore namespace (wordpress-restore) + Hook CR pre-provisioned via GitOps on all clusters | P1 — Not Started |
 | 7 | Continuous Restore via EventTarget: pre-stage PVCs on DR cluster from ConsistentBackupPlan for accelerated RTO | P1 — Not Started |
 | 8 | (Optional) Deploy a VM-based application (OpenShift Virtualization) | P2 — Deferred |
 
@@ -105,8 +119,21 @@ Custom Helm chart at `charts/all/wordpress/` built from owner's existing manifes
 ### Req 6 — Cross-Cluster Restore (Standard Path)
 The restore playbook (`dr-restore.yaml`) must be parameterized for a target cluster kubeconfig/context. The target cluster must have Trilio installed (via this pattern) and a BackupTarget CR pointing to the same storage as the source. In this path, Trilio fetches both metadata and data from the BackupTarget — RTO is bounded by data transfer time. The trigger for restore should be a defined operational event (e.g., an `ansible-navigator run` invoked from a CI/CD pipeline, ACM policy, or documented runbook command).
 
-### Req 6a — Post-Restore Transform
-Trilio's `Transform` CRD allows patching resources during restore (e.g., replacing the Route hostname with the DR-site hostname, updating StorageClass references). A sample Transform CR must be provided and wired into the restore playbook so the app is immediately accessible after restore without manual intervention.
+### Req 6a — Post-Restore Route Transform
+The Restore CR's `transformComponents` field rewrites resource fields during restore. The Route hostname must be patched inline (no separate Transform CR needed) so the WordPress app is immediately accessible at the DR cluster URL after restore. The restore playbook derives the hostname as `{{ restore_namespace }}.apps.{{ cluster_domain }}` when `cluster_domain` is provided. Validated 2026-03-06 via manual UI restore.
+
+### Req 6b — Post-Restore MySQL Hook (WordPress URL Rewrite)
+A Trilio `Hook` CR (`wordpress-restore-hook`) must be pre-deployed in the restore namespace before the restore starts. The post-restore hook updates the MySQL `wp_options` table (`siteurl` and `home`) to the DR cluster URL, ensuring WordPress internal links resolve correctly after failover. This Hook CR is separate from the backup quiesce/unquiesce hook and must be deployed to every DR restore namespace (via ArgoCD or manual apply). The restore playbook detects the Hook CR automatically — if absent, restore proceeds without it (demo mode) with a warning.
+
+### Req 6c — DR Restore Namespace Pre-Provisioning (All Clusters)
+The WordPress restore namespace (`wordpress-restore`) and its prerequisites must be provisioned automatically by the Validated Pattern on all clusters — not created manually before a DR event. This must be managed declaratively via ArgoCD so it exists and is ready before any restore is triggered.
+
+The namespace provisioning must include:
+- The `wordpress-restore` Namespace itself
+- The `wordpress-restore-hook` Hook CR (Req 6b) deployed into that namespace
+- Any required RBAC (ServiceAccount, RoleBinding for `anyuid` SCC) so restored pods can run
+
+**Implementation approach:** Add a new Helm chart (e.g. `charts/all/wordpress-restore/`) or extend the existing `wordpress` chart with a conditional `restoreNamespace: true` section. Wire it into `values-hub.yaml` and `values-group-one.yaml` (DR clusters) via the standard ArgoCD application pattern.
 
 ### Req 7 — Continuous Restore via EventTarget (Accelerated RTO Path)
 
@@ -229,9 +256,12 @@ All pattern bootstrap and operational tooling runs inside the **Red Hat Validate
 | BackupPlan CR scoped to WordPress namespace | charts/all/wordpress/templates/backup-plan.yaml — BackupPlan `wordpress-backup-plan` protecting full `wordpress` namespace via `backupPlanComponents: {}`; references `trilio-s3-target` | BackupPlan deployed via ArgoCD; manual backup completed successfully | Validated 2026-03-05 |
 | Quiesce/unquiesce hooks for MySQL | charts/all/wordpress/templates/backup-hook.yaml — Hook CR `wordpress-mysql-hook` in `wordpress` namespace; pre: `FLUSH TABLES WITH READ LOCK`; post: `FLUSH LOGS; UNLOCK TABLES`; selector: `wordpress-mysql*` | Hook deployed via ArgoCD; executed as part of manual backup run | Validated 2026-03-05 |
 | DR backup workflow playbook (tested) | ansible/playbooks/dr-backup.yaml — reworked to use existing ArgoCD-managed BackupPlan; auto-timestamped backup_name; Full/Incremental type parameter | Playbook run end-to-end; Backup CR reached `Available`; hooks executed; TVM Updated state accepted | Validated 2026-03-05 |
-| DR restore workflow playbook — standard path | ansible/playbooks/dr-restore.yaml | Restore CR reaches `Completed` on separate cluster; pods Running | Not Tested |
+| DR restore from Backup (backup method) | ansible/playbooks/dr-restore.yaml `-e restore_method=backup`; auto-discovers latest Available Backup if name omitted; Route hostname auto-discovered from `Ingress/cluster` | Restore CR `Completed`; Route hostname correct; pods Running | Validated 2026-03-06 |
+| DR restore from location browse (location method) | ansible/playbooks/dr-restore.yaml `-e restore_method=location`; path auto-extracted from Backup CR `status.location` or supplied manually | Restore CR `Completed` | Not Tested |
 | Cross-cluster restore (parameterized for target cluster) | ansible/playbooks/dr-restore.yaml (kubeconfig param) | Restore completes on separate cluster using shared BackupTarget storage | Not Started |
-| Post-restore Transform (Route/Ingress hostname patch) | TBD — Transform CR + restore playbook integration | Route hostname updated to DR-site value post-restore | Not Started |
+| Post-restore Route transform (hostname patch) | dr-restore.yaml `transformComponents` — `{{ restore_namespace }}.{{ ingress_domain }}`; ingress domain auto-discovered from `config.openshift.io/v1 Ingress/cluster`; no separate Transform CR needed | Route hostname updated inline during restore | Validated 2026-03-06 |
+| Post-restore MySQL Hook (wp_options URL rewrite) | wordpress-restore-hook Hook CR pre-deployed in restore namespace; dr-restore.yaml detects and includes in hookConfig if present | MySQL wp_options siteurl/home updated to DR URL post-restore | Not Started |
+| wordpress-restore namespace + RBAC pre-provisioned via GitOps | New Helm chart or extension to wordpress chart; deployed to all clusters via ArgoCD | wordpress-restore NS + Hook CR + RBAC exist on DR cluster before restore | Not Started |
 | ConsistentBackupPlan (multi-app atomic backup) | TBD — ConsistentBackupPlan CR | Multi-namespace backup completes atomically | Not Started |
 | EventTarget flag on DR cluster BackupTarget | BackupTarget CR (eventTarget: true) on DR cluster | EventTarget pod running in trilio-system on DR cluster | Not Started |
 | PVC pre-staging via EventTarget pod | Automatic (driven by EventTarget pod monitoring BackupTarget) | PVCs visible on DR cluster after new backup detected; data local | Not Started |
@@ -252,7 +282,7 @@ All pattern bootstrap and operational tooling runs inside the **Red Hat Validate
 | `ansible/site.yaml` | RHPDS bootstrap (pattern install) | Done |
 | `ansible/playbooks/validate-trilio.yaml` | Pre-flight health check (CSV, TVM, License, pods) | Validated |
 | `ansible/playbooks/dr-backup.yaml` | Verify existing BackupPlan + create Backup CR, poll to completion | Validated 2026-03-05 |
-| `ansible/playbooks/dr-restore.yaml` | Create Restore CR, poll to completion, apply Transform, validate pods | Exists, untested |
+| `ansible/playbooks/dr-restore.yaml` | Create Restore CR (backup/location/consistentset), auto-discover Route hostname, optional hookConfig, poll to completion, validate pods | Validated 2026-03-06 (backup method) |
 | `ansible/playbooks/dr-test.yaml` | Annual DR Test — backup + pre-staged restore + transform end-to-end | Not Started |
 
 ---

@@ -241,4 +241,56 @@ Both indicate the operator is running and Trilio is fully functional. `Updated` 
 **Impact:** Validation playbooks that only check for `Deployed` will loop indefinitely on a healthy but recently-updated TVM. Both `_validate_trilio_ready.yaml` and `validate-trilio.yaml` accept either state using `in ['Deployed', 'Updated']`.
 
 ---
+
+## Trilio Restore CR: Spec Structure and Gotchas
+
+### Correct field locations (validated 2026-03-06)
+
+| Field | Location | Notes |
+|-------|----------|-------|
+| `skipIfAlreadyExists` | `spec.restoreFlags.skipIfAlreadyExists` | NOT at `spec` level — unknown field warning if placed there |
+| `restoreNamespace` | Not a valid field | Restore namespace is determined by `metadata.namespace` |
+| `actionFlags` | `spec.actionFlags: {}` | Required as empty map; omit causes validation warning |
+| `hookConfig` | `spec.hookConfig` | Same structure as BackupPlan hookConfig |
+| `transformComponents` | `spec.transformComponents` | Inline Route hostname rewrite — no separate Transform CR needed |
+
+### Location-based restore source spec
+
+The `source` block for `type: Location` is flat (not nested under `location:`):
+```yaml
+source:
+  type: Location
+  location: "<backupplan-uid>/<backup-uid>"   # status.location from Backup CR
+  target:
+    apiVersion: triliovault.trilio.io/v1
+    kind: Target
+    name: trilio-s3-target
+    namespace: <restore_namespace>             # Target is copied here by Trilio
+```
+The `status.location` path from a Backup CR = `<backupplan-uid>/<backup-uid>`. Retrieve with:
+```bash
+kubectl get backup <name> -n <ns> -o jsonpath='{.status.location}'
+```
+
+### Route hostname construction
+
+Auto-discover the ingress domain from the restore cluster (no manual input):
+```bash
+oc get ingresses.config cluster -o jsonpath='{.spec.domain}'
+# → apps.ocp-dc6.demo.presales.trilio.io   (already includes "apps.")
+```
+Route hostname = `{{ restore_namespace }}.{{ ingress_domain }}` (NOT `.apps.` — it's already in the domain).
+
+### Restore Hook pre-condition
+
+The restore Hook CR (`wordpress-restore-hook`) must **already exist** in the restore namespace before the Restore CR is created. Trilio does not create it — it only references it by name in `hookConfig`. The playbook detects its presence and includes `hookConfig` conditionally; if absent, restore proceeds without it (demo-safe with a warning).
+
+### Kubernetes resource collision: `restore` kind
+
+`kubectl explain restore.spec` returns ACM's `Restore` CRD by default. Always qualify:
+```bash
+kubectl explain restore.spec --api-version=triliovault.trilio.io/v1
+```
+
+---
 *Update this file as new insights are discovered or existing patterns are refined.*
