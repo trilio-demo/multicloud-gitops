@@ -8,6 +8,7 @@ clusterGroup:
     trilio-system:
       operatorGroup: true
       targetNamespaces: []
+    wordpress-restore:
   subscriptions:
     trilio:
       name: k8s-triliovault
@@ -21,6 +22,7 @@ clusterGroup:
     - config-demo
     - hello-world
     - trilio-operand
+    - wordpress-restore
   applications:
     golang-external-secrets:
       name: golang-external-secrets
@@ -46,6 +48,11 @@ clusterGroup:
       overrides:
         - name: backupTarget.bucketName
           value: sa-demo-2
+    wordpress-restore:
+      name: wordpress-restore
+      namespace: wordpress-restore
+      argoProject: wordpress-restore
+      path: charts/all/wordpress-restore
   imperative:
     # NOTE: We *must* use lists and not hashes. As hashes lose ordering once parsed by helm
     # The default schedule is every 10 minutes: imperative.schedule
