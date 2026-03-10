@@ -94,7 +94,7 @@ Each item maps to a deliverable in the Implementation Matrix below.
 | 6 | Restore from BackupTarget location browse (location method) | P1 — Done |
 | 6a | Route hostname transform inline in Restore CR via transformComponents | P1 — Done |
 | 6b | Post-restore MySQL Hook CR (wordpress-restore-hook) for wp_options URL rewrite | P1 — Partial (manual deploy works; GitOps automation pending via 6c) |
-| 6c | DR restore namespace (wordpress-restore) + Hook CR pre-provisioned via GitOps on all clusters | P1 — Not Started |
+| 6c | DR restore namespace (wordpress-restore) + Hook CR pre-provisioned via GitOps on all clusters | P1 — Done |
 | 7 | Continuous Restore via EventTarget: pre-stage PVCs on DR cluster from ConsistentBackupPlan for accelerated RTO | P1 — Not Started |
 | 8 | (Optional) Deploy a VM-based application (OpenShift Virtualization) | P2 — Deferred |
 
@@ -135,7 +135,7 @@ The namespace provisioning must include:
 - The `wordpress-restore-hook` Hook CR (Req 6b) deployed into that namespace
 - Any required RBAC (ServiceAccount, RoleBinding for `anyuid` SCC) so restored pods can run
 
-**Implementation approach:** Add a new Helm chart (e.g. `charts/all/wordpress-restore/`) or extend the existing `wordpress` chart with a conditional `restoreNamespace: true` section. Wire it into `values-hub.yaml` and `values-group-one.yaml` (DR clusters) via the standard ArgoCD application pattern.
+**Implementation:** `charts/all/wordpress-restore/` Helm chart wired into both `values-hub.yaml` and `values-group-one.yaml`. Deploys the namespace, `wordpress-sa` ServiceAccount, `anyuid` SCC RoleBinding, and `wordpress-restore-hook` Hook CR on all clusters. Hook URL rendered at deploy time from `global.localClusterDomain` — no manual configuration required.
 
 ### Req 7 — Continuous Restore via EventTarget (Accelerated RTO Path)
 
@@ -262,8 +262,8 @@ All pattern bootstrap and operational tooling runs inside the **Red Hat Validate
 | DR restore from location browse (location method) | ansible/playbooks/dr-restore.yaml `-e restore_method=location`; path auto-extracted from Backup CR `status.location` or supplied manually via `backup_location_path`; Target namespace must be `trilio_namespace` (trilio-system), not restore namespace | Restore CR `Completed`; Route hostname correct; Hook ran (MySQL wp_options updated); pods Running | Validated 2026-03-10 |
 | Cross-cluster restore (parameterized for target cluster) | ansible/playbooks/dr-restore.yaml (kubeconfig param) | Restore completes on separate cluster using shared BackupTarget storage | Not Started |
 | Post-restore Route transform (hostname patch) | dr-restore.yaml `transformComponents` — `{{ restore_namespace }}.{{ ingress_domain }}`; ingress domain auto-discovered from `config.openshift.io/v1 Ingress/cluster`; no separate Transform CR needed | Route hostname updated inline during restore | Validated 2026-03-06 |
-| Post-restore MySQL Hook (wp_options URL rewrite) | wordpress-restore-hook Hook CR pre-deployed in restore namespace; dr-restore.yaml detects and includes in hookConfig if present | MySQL wp_options siteurl/home updated to DR URL post-restore | Validated manually 2026-03-06; GitOps automation pending (Req 6c) |
-| wordpress-restore namespace + RBAC pre-provisioned via GitOps | New Helm chart or extension to wordpress chart; deployed to all clusters via ArgoCD | wordpress-restore NS + Hook CR + RBAC exist on DR cluster before restore | Not Started |
+| Post-restore MySQL Hook (wp_options URL rewrite) | wordpress-restore-hook Hook CR pre-deployed in restore namespace; dr-restore.yaml detects and includes in hookConfig if present | MySQL wp_options siteurl/home updated to DR URL post-restore | Validated 2026-03-10; GitOps automation complete (Req 6c) |
+| wordpress-restore namespace + RBAC pre-provisioned via GitOps | charts/all/wordpress-restore/ — deploys namespace, wordpress-sa SA, anyuid RoleBinding, wordpress-restore-hook Hook CR; wired into values-hub.yaml + values-group-one.yaml; hook URL rendered from global.localClusterDomain | wordpress-restore NS + Hook CR + RBAC pre-exist on all clusters before restore | Done 2026-03-10 |
 | ConsistentBackupPlan (multi-app atomic backup) | TBD — ConsistentBackupPlan CR | Multi-namespace backup completes atomically | Not Started |
 | EventTarget flag on DR cluster BackupTarget | BackupTarget CR (eventTarget: true) on DR cluster | EventTarget pod running in trilio-system on DR cluster | Not Started |
 | PVC pre-staging via EventTarget pod | Automatic (driven by EventTarget pod monitoring BackupTarget) | PVCs visible on DR cluster after new backup detected; data local | Not Started |

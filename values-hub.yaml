@@ -11,6 +11,7 @@ clusterGroup:
       operatorGroup: true
       targetNamespaces: []
     wordpress:
+    wordpress-restore:
   subscriptions:
     acm:
       name: advanced-cluster-management
@@ -28,6 +29,7 @@ clusterGroup:
     - hello-world
     - trilio-operand
     - wordpress
+    - wordpress-restore
   # Explicitly mention the cluster-state based overrides we plan to use for this pattern.
   # We can use self-referential variables because the chart calls the tpl function with these variables defined
   sharedValueFiles:
@@ -91,6 +93,11 @@ clusterGroup:
       namespace: wordpress
       argoProject: wordpress
       path: charts/all/wordpress
+    wordpress-restore:
+      name: wordpress-restore
+      namespace: wordpress-restore
+      argoProject: wordpress-restore
+      path: charts/all/wordpress-restore
   imperative:
     # NOTE: We *must* use lists and not hashes. As hashes lose ordering once parsed by helm
     # The default schedule is every 10 minutes: imperative.schedule
