@@ -97,6 +97,7 @@ Each item maps to a deliverable in the Implementation Matrix below.
 | 6c | DR restore namespace (wordpress-restore) + Hook CR pre-provisioned via GitOps on all clusters | P1 — Done |
 | 7 | Continuous Restore via EventTarget: pre-stage PVCs on DR cluster from ConsistentBackupPlan for accelerated RTO | P1 — Not Started |
 | 8 | (Optional) Deploy a VM-based application (OpenShift Virtualization) | P2 — Deferred |
+| 9 | Upgrade to Trilio 5.3.x: adopt native license-via-Secret model; remove License Job workaround | P1 — Not Started |
 
 ---
 
@@ -184,6 +185,24 @@ EventTarget pod running                           │ DR Test triggered
 
 ### Req 8 — VM Application (Deferred)
 OpenShift Virtualization (KubeVirt/CNV) adds significant complexity (operator, DataVolumes, potentially build pipelines). A simple RHEL or Fedora appliance VM avoids Windows licensing friction. Deferred to a future iteration; flagged as a stretch goal for customer POC demos. If implemented, the VM should be brought up in a `stopped` state post-restore so the operator can verify before starting.
+
+### Req 9 — Upgrade to Trilio 5.3.x: Native License-via-Secret
+
+Trilio 5.3.0 introduces native support for license management via a Kubernetes Secret — the operator reads the license key directly from a named Secret, eliminating the need for the License CR. During an upgrade from 5.2.x, Trilio automatically converts the existing License CR to the new Secret-based model.
+
+**Impact on this pattern:**
+- The `trilio-license-job` (Job, ServiceAccount, Role, RoleBinding) can be removed from `charts/all/trilio-operand/`
+- The ESO ExternalSecret (`trilio-license-external-secret.yaml`) that syncs the key from Vault may be retained or simplified — the Secret it creates (`trilio-license`) should be the Secret that Trilio 5.3.x reads natively
+- This resolves the Helm/ESO ordering limitation that necessitated the Job workaround (see Learnings.md)
+
+**Implementation steps (pending Trilio 5.3.x YAML from vendor):**
+1. Obtain the 5.3.x TrilioVaultManager and License Secret spec from Trilio
+2. Update `charts/all/trilio-operand/` to remove the Job and adopt the native Secret reference
+3. Change OLM channel from `5.2.x` → `5.3.x` in `values-hub.yaml` and `values-group-one.yaml`
+4. Validate upgrade path: existing License CR converts automatically; no manual intervention required
+5. Update `Learnings.md` — the Job workaround section becomes historical
+
+**Current state:** Pinned to `5.2.x` channel (OLM will not auto-upgrade) until this requirement is implemented. The vendor will supply the new YAML for the 5.3.x license model before implementation begins.
 
 ---
 
