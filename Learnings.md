@@ -254,7 +254,7 @@ Both indicate the operator is running and Trilio is fully functional. `Updated` 
 | `hookConfig` | `spec.hookConfig` | Same structure as BackupPlan hookConfig |
 | `transformComponents` | `spec.transformComponents` | Inline Route hostname rewrite — no separate Transform CR needed |
 
-### Location-based restore source spec
+### Location-based restore source spec (validated 2026-03-10)
 
 The `source` block for `type: Location` is flat (not nested under `location:`):
 ```yaml
@@ -265,12 +265,17 @@ source:
     apiVersion: triliovault.trilio.io/v1
     kind: Target
     name: trilio-s3-target
-    namespace: <restore_namespace>             # Target is copied here by Trilio
+    namespace: trilio-system                  # MUST be trilio-system — NOT restore_namespace
 ```
+
+**Critical:** The Target namespace in the location source spec must be `trilio-system` (where the Target CR actually lives), not the restore namespace. Trilio's admission webhook (`tvk-mutation.trilio.io`) validates the Target exists at the specified namespace at CR creation time — if you specify the restore namespace, the webhook returns HTTP 400: `targets.triliovault.trilio.io "trilio-s3-target" not found`.
+
 The `status.location` path from a Backup CR = `<backupplan-uid>/<backup-uid>`. Retrieve with:
 ```bash
 kubectl get backup <name> -n <ns> -o jsonpath='{.status.location}'
 ```
+
+**End-to-end validation (2026-03-10):** Location method restore completed successfully with manual `backup_location_path`. Route transform applied correctly, post-restore MySQL Hook ran and updated `wp_options` siteurl/home, all pods Running.
 
 ### Route hostname construction
 

@@ -348,7 +348,7 @@
             apiVersion: triliovault.trilio.io/v1
             kind: Target
             name: "{{ backup_target_name }}"
-            namespace: "{{ restore_namespace }}"
+            namespace: "{{ trilio_namespace }}"
 
     - name: Build Restore source spec (method=consistentset)
       when: restore_method == 'consistentset'

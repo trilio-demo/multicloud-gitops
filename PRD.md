@@ -91,7 +91,7 @@ Each item maps to a deliverable in the Implementation Matrix below.
 | 4 | Define a BackupPlan CR scoped to the sample app namespace, with quiesce/unquiesce hooks | P0 — Done |
 | 5 | Execute a Backup of the sample app via Ansible playbook | P0 — Done |
 | 6 | Restore from Backup via Ansible playbook (backup method) | P1 — Done |
-| 6 | Restore from BackupTarget location browse (location method) | P1 — Not Tested |
+| 6 | Restore from BackupTarget location browse (location method) | P1 — Done |
 | 6a | Route hostname transform inline in Restore CR via transformComponents | P1 — Done |
 | 6b | Post-restore MySQL Hook CR (wordpress-restore-hook) for wp_options URL rewrite | P1 — Partial (manual deploy works; GitOps automation pending via 6c) |
 | 6c | DR restore namespace (wordpress-restore) + Hook CR pre-provisioned via GitOps on all clusters | P1 — Not Started |
@@ -259,7 +259,7 @@ All pattern bootstrap and operational tooling runs inside the **Red Hat Validate
 | Quiesce/unquiesce hooks for MySQL | charts/all/wordpress/templates/backup-hook.yaml — Hook CR `wordpress-mysql-hook` in `wordpress` namespace; pre: `FLUSH TABLES WITH READ LOCK`; post: `FLUSH LOGS; UNLOCK TABLES`; selector: `wordpress-mysql*` | Hook deployed via ArgoCD; executed as part of manual backup run | Validated 2026-03-05 |
 | DR backup workflow playbook (tested) | ansible/playbooks/dr-backup.yaml — reworked to use existing ArgoCD-managed BackupPlan; auto-timestamped backup_name; Full/Incremental type parameter | Playbook run end-to-end; Backup CR reached `Available`; hooks executed; TVM Updated state accepted | Validated 2026-03-05 |
 | DR restore from Backup (backup method) | ansible/playbooks/dr-restore.yaml `-e restore_method=backup`; auto-discovers latest Available Backup if name omitted; Route hostname auto-discovered from `Ingress/cluster` | Restore CR `Completed`; Route hostname correct; pods Running | Validated 2026-03-06 |
-| DR restore from location browse (location method) | ansible/playbooks/dr-restore.yaml `-e restore_method=location`; path auto-extracted from Backup CR `status.location` or supplied manually | Restore CR `Completed` | Not Tested |
+| DR restore from location browse (location method) | ansible/playbooks/dr-restore.yaml `-e restore_method=location`; path auto-extracted from Backup CR `status.location` or supplied manually via `backup_location_path`; Target namespace must be `trilio_namespace` (trilio-system), not restore namespace | Restore CR `Completed`; Route hostname correct; Hook ran (MySQL wp_options updated); pods Running | Validated 2026-03-10 |
 | Cross-cluster restore (parameterized for target cluster) | ansible/playbooks/dr-restore.yaml (kubeconfig param) | Restore completes on separate cluster using shared BackupTarget storage | Not Started |
 | Post-restore Route transform (hostname patch) | dr-restore.yaml `transformComponents` — `{{ restore_namespace }}.{{ ingress_domain }}`; ingress domain auto-discovered from `config.openshift.io/v1 Ingress/cluster`; no separate Transform CR needed | Route hostname updated inline during restore | Validated 2026-03-06 |
 | Post-restore MySQL Hook (wp_options URL rewrite) | wordpress-restore-hook Hook CR pre-deployed in restore namespace; dr-restore.yaml detects and includes in hookConfig if present | MySQL wp_options siteurl/home updated to DR URL post-restore | Validated manually 2026-03-06; GitOps automation pending (Req 6c) |
