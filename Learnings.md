@@ -48,6 +48,11 @@ This is the end-to-end chain of events that occurs when a new cluster is attache
      ├── wordpress-restore        → creates wordpress-restore NS, Hook CR, SA, RBAC
      ├── config-demo              → demo config app
      └── hello-world              → demo hello-world app
+
+   ⚠️  KNOWN RACE CONDITION (Req 10): ArgoCD syncs trilio-operand immediately.
+   The TrilioVaultManager and BackupTarget CRs require Trilio CRDs, but OLM
+   is still installing the operator. First sync fails → app shows OutOfSync / Missing.
+   See workaround below.
          │
          ▼
 6. OLM Subscription (from values-group-one.yaml) installs Trilio operator
@@ -71,6 +76,27 @@ This is the end-to-end chain of events that occurs when a new cluster is attache
       - wordpress-sa ServiceAccount + anyuid RoleBinding
     → DR restore can be triggered immediately, no manual prep required
 ```
+
+### Known Issue: trilio-operand Race Condition
+
+`trilio-operand` will show `OutOfSync / Missing` after initial onboard. This is expected.
+
+**Wait for:** `oc get csv -n trilio-system` → `k8s-triliovault-stable.5.2.0   Succeeded`
+
+**Then trigger a manual sync:**
+```bash
+oc patch application trilio-operand \
+  -n <spoke-argocd-namespace> \
+  --type merge \
+  -p '{"operation":{"sync":{}}}'
+```
+
+If it still does not recover, verify ESO is running and the secrets exist before retrying:
+```bash
+oc get secret trilio-license aws-s3-login -n trilio-system
+```
+
+Tracked as Req 10. The permanent fix (sync waves or retry policy) requires VP team guidance.
 
 ### Talking Points
 - **One label, full stack.** The only action needed on the spoke after ODF is `oc label managedcluster`. ACM and ArgoCD do the rest — operator, operand, secrets, restore prerequisites.

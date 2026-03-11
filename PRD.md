@@ -98,6 +98,7 @@ Each item maps to a deliverable in the Implementation Matrix below.
 | 7 | Continuous Restore via EventTarget: pre-stage PVCs on DR cluster from ConsistentBackupPlan for accelerated RTO | P1 — Not Started |
 | 8 | (Optional) Deploy a VM-based application (OpenShift Virtualization) | P2 — Deferred |
 | 9 | Upgrade to Trilio 5.3.x: adopt native license-via-Secret model; remove License Job workaround | P1 — Not Started |
+| 10 | Spoke onboarding: resolve OLM/ArgoCD race condition so trilio-operand self-heals without manual sync | P1 — Not Started |
 
 ---
 
@@ -203,6 +204,26 @@ Trilio 5.3.0 introduces native support for license management via a Kubernetes S
 5. Update `Learnings.md` — the Job workaround section becomes historical
 
 **Current state:** Pinned to `5.2.x` channel (OLM will not auto-upgrade) until this requirement is implemented. The vendor will supply the new YAML for the 5.3.x license model before implementation begins.
+
+### Req 10 — Spoke Onboarding: Resolve OLM/ArgoCD Race Condition
+
+When ACM bootstraps a new group-one spoke, ArgoCD syncs all applications immediately — including `trilio-operand`, which contains the TrilioVaultManager and BackupTarget CRs. These require Trilio CRDs to be registered. OLM installs the Trilio operator asynchronously; if ArgoCD wins the race, the sync fails with CRDs not yet available and the app stays `OutOfSync / Missing`.
+
+**Observed behaviour (2026-03-10):** CSV reached `Succeeded` (5.2.0) but `trilio-operand` remained `OutOfSync / Missing`. Manual sync patch did not self-recover, suggesting a secondary ESO dependency (ExternalSecrets also in the same chart need ESO running and Vault reachable before the License Job proceeds).
+
+**Candidate approaches (to be validated with VP team):**
+- **a) ArgoCD sync-wave annotations** (`argocd.argoproj.io/sync-wave`) on TVM and Target CRs within `charts/all/trilio-operand/` — delays their application within a single sync so plain K8s resources (ExternalSecrets, SA, RBAC) apply first. Supported by VP community; documented in VP workshop "rough edges" section. Does not solve cross-app ordering (OLM vs operand) but reduces the window.
+- **b) Retry policy** on the generated ArgoCD Application — VP framework clusterGroup values schema does not expose `syncPolicy.retry` directly; requires VP team guidance or direct Application CR patching post-onboard.
+- **c) VP framework phased install** — confirm whether the framework provides a built-in mechanism to sequence subscriptions before applications.
+
+**Current workaround:** After CSV reaches `Succeeded`, manually trigger a sync:
+```bash
+oc patch application trilio-operand \
+  -n <spoke-argocd-namespace> \
+  --type merge \
+  -p '{"operation":{"sync":{}}}'
+```
+If the application still does not recover, check that ESO is running and the `trilio-license` and `aws-s3-login` Secrets exist in `trilio-system` before retrying.
 
 ---
 
