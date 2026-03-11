@@ -77,13 +77,50 @@ This is the end-to-end chain of events that occurs when a new cluster is attache
     → DR restore can be triggered immediately, no manual prep required
 ```
 
-### Known Issue: trilio-operand Race Condition
+### Known Issue: trilio-operand Two-Layer Deadlock (Req 10)
 
-`trilio-operand` will show `OutOfSync / Missing` after initial onboard. This is expected.
+`trilio-operand` will show `OutOfSync / Missing` after initial onboard. The root cause is a
+**two-layer deadlock**, not a simple timing issue:
 
-**Wait for:** `oc get csv -n trilio-system` → `k8s-triliovault-stable.5.2.0   Succeeded`
+1. **Layer 1 — Trilio admission webhook** (`tvk-mutation.trilio.io`) validates the Target CR at
+   apply time and checks that the credential Secret (`aws-s3-login`) exists. If it doesn't, the
+   webhook rejects the entire sync with `Target.triliovault.trilio.io "" not found`.
 
-**Then trigger a manual sync:**
+2. **Layer 2 — ExternalSecret chicken-and-egg**: `aws-s3-login` is created by ESO from an
+   ExternalSecret that lives in the `trilio-operand` chart. Because the Target CR rejection causes
+   the entire sync to fail, the ExternalSecret never gets applied — so ESO never creates the
+   secret — so the webhook keeps rejecting — loop.
+
+The ArgoCD retry count climbs (observed: attempt #7+) but never recovers on its own.
+
+**Diagnosis checklist:**
+```bash
+oc get csv -n trilio-system                          # must be Succeeded
+oc get clustersecretstore vault-backend              # must be Ready=True
+oc get externalsecret -n trilio-system               # will be empty (deadlock)
+oc get secret trilio-license aws-s3-login -n trilio-system  # will be not found
+```
+
+**Workaround — break the deadlock by manually applying the ExternalSecrets:**
+```bash
+# Run from repo root on the spoke cluster context
+helm template trilio-operand charts/all/trilio-operand \
+  --set backupTarget.bucketName=sa-demo-2 \
+  --set global.localClusterName=dr-spoke \
+  -s templates/backup-target-secret.yaml \
+  -s templates/trilio-license-external-secret.yaml \
+  | oc apply -f -
+```
+
+> `--set global.localClusterName=dr-spoke` is required only to satisfy the TrilioVaultManager
+> template during rendering — the ExternalSecret templates themselves use no Helm globals.
+
+Wait for ESO to sync (30–60s), then verify secrets exist:
+```bash
+oc get secret trilio-license aws-s3-login -n trilio-system
+```
+
+Then trigger the ArgoCD sync:
 ```bash
 oc patch application trilio-operand \
   -n <spoke-argocd-namespace> \
@@ -91,12 +128,9 @@ oc patch application trilio-operand \
   -p '{"operation":{"sync":{}}}'
 ```
 
-If it still does not recover, verify ESO is running and the secrets exist before retrying:
-```bash
-oc get secret trilio-license aws-s3-login -n trilio-system
-```
-
-Tracked as Req 10. The permanent fix (sync waves or retry policy) requires VP team guidance.
+**Permanent fix (Req 10):** Split ExternalSecrets into a separate ArgoCD application that syncs
+before `trilio-operand`. Once ESO creates the secrets, the Trilio webhook is satisfied and the
+Target CR applies cleanly on the first try with no manual intervention.
 
 ### Talking Points
 - **One label, full stack.** The only action needed on the spoke after ODF is `oc label managedcluster`. ACM and ArgoCD do the rest — operator, operand, secrets, restore prerequisites.

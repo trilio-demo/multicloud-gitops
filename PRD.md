@@ -211,19 +211,15 @@ When ACM bootstraps a new group-one spoke, ArgoCD syncs all applications immedia
 
 **Observed behaviour (2026-03-10):** CSV reached `Succeeded` (5.2.0) but `trilio-operand` remained `OutOfSync / Missing`. Manual sync patch did not self-recover, suggesting a secondary ESO dependency (ExternalSecrets also in the same chart need ESO running and Vault reachable before the License Job proceeds).
 
-**Candidate approaches (to be validated with VP team):**
-- **a) ArgoCD sync-wave annotations** (`argocd.argoproj.io/sync-wave`) on TVM and Target CRs within `charts/all/trilio-operand/` — delays their application within a single sync so plain K8s resources (ExternalSecrets, SA, RBAC) apply first. Supported by VP community; documented in VP workshop "rough edges" section. Does not solve cross-app ordering (OLM vs operand) but reduces the window.
-- **b) Retry policy** on the generated ArgoCD Application — VP framework clusterGroup values schema does not expose `syncPolicy.retry` directly; requires VP team guidance or direct Application CR patching post-onboard.
-- **c) VP framework phased install** — confirm whether the framework provides a built-in mechanism to sequence subscriptions before applications.
+**Root cause confirmed (2026-03-11):** Two-layer deadlock:
+1. Trilio's admission webhook (`tvk-mutation.trilio.io`) validates the Target CR and checks that `aws-s3-login` credential Secret exists at apply time — rejects if absent
+2. `aws-s3-login` is created by an ESO ExternalSecret that lives in the same `trilio-operand` chart — because the webhook rejection causes the entire sync to fail, the ExternalSecret never lands, ESO never creates the secret, webhook keeps rejecting
 
-**Current workaround:** After CSV reaches `Succeeded`, manually trigger a sync:
-```bash
-oc patch application trilio-operand \
-  -n <spoke-argocd-namespace> \
-  --type merge \
-  -p '{"operation":{"sync":{}}}'
-```
-If the application still does not recover, check that ESO is running and the `trilio-license` and `aws-s3-login` Secrets exist in `trilio-system` before retrying.
+ArgoCD retries indefinitely but never self-recovers. Observed: attempt #7+ with no progress.
+
+**Confirmed fix:** Split the ExternalSecrets (`trilio-s3-credentials`, `trilio-license`) out of `charts/all/trilio-operand/` into a new dedicated ArgoCD application (e.g. `trilio-secrets`) that deploys before `trilio-operand`. Once ESO creates the secrets, the Trilio webhook is satisfied and `trilio-operand` syncs cleanly on the first try.
+
+**Current workaround:** Manually render and apply the ExternalSecrets to break the deadlock, then trigger a sync. See `Learnings.md` onboarding Known Issue section for the exact commands.
 
 ---
 
