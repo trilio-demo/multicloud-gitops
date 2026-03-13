@@ -40,6 +40,20 @@ clusterGroup:
       namespace: hello-world
       argoProject: hello-world
       path: charts/all/hello-world
+    # Req 10: trilio-secrets runs at wave -1 so ESO creates the S3 and license
+    # Secrets before trilio-operand (wave 0) attempts to apply the BackupTarget.
+    # The Trilio admission webhook rejects a Target CR if aws-s3-login is absent.
+    trilio-secrets:
+      name: trilio-secrets
+      namespace: trilio-system
+      argoProject: trilio-operand
+      path: charts/all/trilio-secrets
+      annotations:
+        argocd.argoproj.io/sync-wave: "-1"
+    # Req 10: SkipDryRunOnMissingResource=true lets ArgoCD apply the TrilioVaultManager
+    # CR even though the child CRDs (targets.triliovault.trilio.io etc.) are not yet
+    # registered. The operator registers them after TVM reconciles, and ArgoCD retries
+    # until BackupTarget and friends apply successfully.
     trilio-operand:
       name: trilio-operand
       namespace: trilio-system
@@ -48,6 +62,12 @@ clusterGroup:
       overrides:
         - name: backupTarget.bucketName
           value: sa-demo-2
+      syncPolicy:
+        automated: {}
+        retry:
+          limit: 20
+        syncOptions:
+          - SkipDryRunOnMissingResource=true
     wordpress-restore:
       name: wordpress-restore
       namespace: wordpress-restore
