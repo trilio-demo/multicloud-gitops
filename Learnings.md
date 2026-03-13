@@ -77,60 +77,324 @@ This is the end-to-end chain of events that occurs when a new cluster is attache
     → DR restore can be triggered immediately, no manual prep required
 ```
 
-### Known Issue: trilio-operand Two-Layer Deadlock (Req 10)
+### Known Issue: trilio-operand Three-Layer Ordering Problem (Req 10)
 
 `trilio-operand` will show `OutOfSync / Missing` after initial onboard. The root cause is a
-**two-layer deadlock**, not a simple timing issue:
+**confirmed three-layer ordering failure** (validated 2026-03-13 by live cluster debugging):
 
-1. **Layer 1 — Trilio admission webhook** (`tvk-mutation.trilio.io`) validates the Target CR at
-   apply time and checks that the credential Secret (`aws-s3-login`) exists. If it doesn't, the
-   webhook rejects the entire sync with `Target.triliovault.trilio.io "" not found`.
+**Layer 0 — ArgoCD sync plan validation aborts on unknown CRD (confirmed root cause)**
 
-2. **Layer 2 — ExternalSecret chicken-and-egg**: `aws-s3-login` is created by ESO from an
-   ExternalSecret that lives in the `trilio-operand` chart. Because the Target CR rejection causes
-   the entire sync to fail, the ExternalSecret never gets applied — so ESO never creates the
-   secret — so the webhook keeps rejecting — loop.
+ArgoCD validates *all* resources in the sync plan before applying *any* of them. The `trilio-operand`
+chart includes a `Target` CR (`targets.triliovault.trilio.io`). At first sync, this CRD does not
+exist — only `triliovaultmanagers.triliovault.trilio.io` exists (installed by OLM CSV).
+ArgoCD cannot build a valid sync task for an unknown resource type and aborts with:
 
-The ArgoCD retry count climbs (observed: attempt #7+) but never recovers on its own.
-
-**Diagnosis checklist:**
-```bash
-oc get csv -n trilio-system                          # must be Succeeded
-oc get clustersecretstore vault-backend              # must be Ready=True
-oc get externalsecret -n trilio-system               # will be empty (deadlock)
-oc get secret trilio-license aws-s3-login -n trilio-system  # will be not found
+```
+Failed sync attempt ...: one or more synchronization tasks are not valid
 ```
 
-**Workaround — break the deadlock by manually applying the ExternalSecrets:**
+Because the entire sync is aborted at the planning phase, **nothing** in the chart gets applied —
+including the TrilioVaultManager CR itself. TVM never reconciles, so its child CRDs
+(`targets`, `backupplans`, `backups`, `restores`, etc.) never get registered. ArgoCD retries and
+hits the same wall every time. Retry count climbs indefinitely without self-recovery.
+
+**Why only `triliovaultmanagers.triliovault.trilio.io` at CSV Succeeded:**
+The OLM CSV installs the Trilio *operator* and registers the TVM CRD. The operator then
+installs all other Trilio CRDs (Target, BackupPlan, Backup, Restore, Hook, Policy) only after a
+TrilioVaultManager CR is applied and the operator reconciles it. This creates a mandatory
+two-step sequence that ArgoCD's single-app, single-wave model cannot satisfy.
+
+**Layer 1 — Trilio admission webhook rejects Target if credential Secret is missing**
+
+Once TVM has been applied and its child CRDs registered, the next sync will attempt to apply the
+`Target` CR. The Trilio admission webhook (`tvk-mutation.trilio.io`) validates that the
+credential Secret (`aws-s3-login`) exists at apply time. If it doesn't, the webhook rejects the
+apply and the sync fails.
+
+**Layer 2 — ExternalSecret chicken-and-egg**
+
+`aws-s3-login` is created by ESO from an ExternalSecret in the `trilio-operand` chart. If the
+Target CR rejection causes the sync to fail early, the ExternalSecret may not get applied —
+so ESO never creates the secret — so the webhook keeps rejecting.
+
+### Step-by-Step Debugging Runbook
+
+Run in order — each result tells you which layer is blocking.
+
 ```bash
-# Run from repo root on the spoke cluster context
+# 1. Is the Trilio operator installed?
+oc get csv -n trilio-system
+# Expect: k8s-triliovault-stable.5.2.0   Succeeded
+# If Pending/Installing: OLM still working — wait and retry
+
+# 2. Is ESO reachable?
+oc get clustersecretstore vault-backend
+# Expect: READY=True   STATUS=Valid
+
+# 3. Which Trilio CRDs exist? (KEY diagnostic for Layer 0)
+oc get crd | grep trilio
+# Layer 0 confirmed if only this row appears:
+#   triliovaultmanagers.triliovault.trilio.io
+# Healthy state would include: targets, backupplans, backups, restores, hooks, policies
+
+# 4. Which ArgoCD resources are Missing vs Healthy?
+ARGO_NS=$(oc get application -A --no-headers | head -1 | awk '{print $1}')
+oc get application trilio-operand -n $ARGO_NS \
+  -o jsonpath='{range .status.resources[*]}{.kind}{"\t"}{.name}{"\t"}{.status}{"\t"}{.health.status}{"\n"}{end}'
+# Layer 0: TrilioVaultManager Missing AND Target Missing (ArgoCD aborted before applying anything)
+# Layer 1: TrilioVaultManager present, Target Missing (webhook blocking)
+# Layer 2: ExternalSecrets Missing (secrets never created)
+
+# 5. What is the exact sync error?
+oc get application trilio-operand -n $ARGO_NS \
+  -o jsonpath='{.status.operationState.message}'
+# Layer 0: "one or more synchronization tasks are not valid"
+# Layer 1: message contains "tvk-mutation.trilio.io" and "aws-s3-login not found"
+
+# 6. Retry count (confirms self-recovery is not happening)
+oc get application trilio-operand -n $ARGO_NS \
+  -o jsonpath='{.status.operationState.retryCount}'
+# >3 and climbing = no self-recovery, proceed to workaround
+
+# 7. Confirm secrets state
+oc get secret trilio-license aws-s3-login -n trilio-system
+oc get externalsecret -n trilio-system
+```
+
+**Decision table:**
+
+| `oc get crd \| grep trilio` | ExternalSecrets | Secrets | Layer |
+|-----------------------------|-----------------|---------|-------|
+| Only `triliovaultmanagers` | Missing | Missing | **0 — apply TVM manually** |
+| All CRDs present | Missing | Missing | **1+2 — apply ExternalSecrets manually** |
+| All CRDs present | Present | Missing | **1 — ESO can't reach Vault** |
+| All CRDs present | Present | Present | **Check TVM/Target status directly** |
+
+### Workaround — Layer 0 (CRD gap, TVM never applied)
+
+```bash
+# Step 1: Apply TVM CR manually to bootstrap child CRDs
+helm template trilio-operand charts/all/trilio-operand \
+  --set global.localClusterName=dr-spoke \
+  -s templates/triliovaultmanager.yaml \
+  | oc apply -f -
+
+# Step 2: Wait for TVM to reconcile and register child CRDs (~2-3 min)
+watch oc get triliovaultmanager -n trilio-system
+# Wait for status: Deployed
+
+# Step 3: Confirm child CRDs now exist
+oc get crd | grep trilio
+# Should now show: targets, backupplans, backups, restores, hooks, policies
+
+# Step 4: Force ArgoCD sync — plan validation will now succeed
+oc patch application trilio-operand -n $ARGO_NS \
+  --type merge -p '{"operation":{"sync":{}}}'
+```
+
+### Workaround — Layer 1/2 (webhook or ExternalSecret gap, TVM already applied)
+
+```bash
+# Apply ExternalSecrets manually to break the chicken-and-egg
 helm template trilio-operand charts/all/trilio-operand \
   --set backupTarget.bucketName=sa-demo-2 \
   --set global.localClusterName=dr-spoke \
   -s templates/backup-target-secret.yaml \
   -s templates/trilio-license-external-secret.yaml \
   | oc apply -f -
-```
 
-> `--set global.localClusterName=dr-spoke` is required only to satisfy the TrilioVaultManager
-> template during rendering — the ExternalSecret templates themselves use no Helm globals.
-
-Wait for ESO to sync (30–60s), then verify secrets exist:
-```bash
+# Wait for ESO to sync (30-60s), verify secrets exist
 oc get secret trilio-license aws-s3-login -n trilio-system
+
+# Force ArgoCD sync
+oc patch application trilio-operand -n $ARGO_NS \
+  --type merge -p '{"operation":{"sync":{}}}'
 ```
 
-Then trigger the ArgoCD sync:
+**Permanent fix (Req 10):** Split the chart into ordered ArgoCD Applications using sync-waves:
+- `trilio-tvm` (wave -2): TrilioVaultManager CR only; ArgoCD waits for it to be Healthy before proceeding
+- `trilio-secrets` (wave -1): ExternalSecrets only; ESO creates Secrets before Target is applied
+- `trilio-operand` (wave 0): Target, BackupPlan, License Job
+
+Add `syncOptions: ["SkipDryRunOnMissingResource=true"]` to handle any residual CRD timing gaps.
+See Req 10 in PRD.md for implementation plan.
+
+---
+
+### Spoke Reset: Full Teardown for Re-Onboarding
+
+Use this runbook to cleanly remove the VP stack from a group-one spoke so you can re-add it to
+ACM and observe the full onboarding sequence from scratch. (Validated 2026-03-13 on dr-cluster.)
+
+#### ACM delivery mechanisms (critical to understand before teardown)
+
+ACM uses **two distinct mechanisms** to configure spoke clusters. Resources applied by each
+survive teardown differently:
+
+| Resource | Applied by | Survives app-of-apps deletion? | Removed by |
+|----------|-----------|-------------------------------|------------|
+| OpenShift GitOps operator Subscription | ACM ConfigurationPolicy | **Yes** | Delete Subscription explicitly |
+| Trilio operator Subscription | ACM ConfigurationPolicy | **Yes** | Delete Subscription explicitly |
+| ESO operator Subscription | ACM ConfigurationPolicy | **Yes** | Delete Subscription explicitly |
+| app-of-apps Application in `openshift-gitops` | ACM GitOpsCluster | — | Delete Application + remove ACM label |
+| All `applications:` in values-group-one.yaml | ArgoCD (via app-of-apps) | No | Cascade delete from app-of-apps |
+
+**Key insight:** OLM Subscriptions (including Trilio) are applied directly by ACM's work agent
+as `ConfigurationPolicy` objects — they do not go through ArgoCD. This is why the Trilio
+operator Subscription survived deleting the ArgoCD apps and required explicit cleanup.
+Removing the `clusterGroup` label stops ACM from *enforcing* its policies but does not
+delete what was already installed.
+
+#### ArgoCD topology on the spoke (critical to understand before teardown)
+
+Two ArgoCD instances exist on the spoke after onboarding:
+
+```
+openshift-gitops (namespace)
+  └── Application: dallas-multicloudops-group-one   ← app-of-apps, created by ACM
+        │  watches Git repo, renders values-group-one.yaml, generates child apps
+        ▼
+dallas-multicloudops-group-one (namespace — separate ArgoCD instance)
+  ├── config-demo
+  ├── golang-external-secrets
+  ├── hello-world
+  ├── trilio-operand
+  └── wordpress-restore
+```
+
+ACM creates the app-of-apps in `openshift-gitops`. Once deployed, the app-of-apps is
+**self-sufficient** — it regenerates children continuously regardless of the ACM label.
+Deleting child apps without first removing the app-of-apps causes them to immediately reappear.
+
+#### Step 1 — Hub: remove the ACM cluster label
+
 ```bash
-oc patch application trilio-operand \
-  -n <spoke-argocd-namespace> \
-  --type merge \
-  -p '{"operation":{"sync":{}}}'
+# On hub cluster context — must be done FIRST
+oc label managedcluster dr-cluster clusterGroup-
+# Trailing dash removes the label. Stops ACM from re-pushing policies.
 ```
 
-**Permanent fix (Req 10):** Split ExternalSecrets into a separate ArgoCD application that syncs
-before `trilio-operand`. Once ESO creates the secrets, the Trilio webhook is satisfied and the
-Target CR applies cleanly on the first try with no manual intervention.
+#### Step 2 — Spoke: delete the app-of-apps (stops child app regeneration)
+
+```bash
+# On spoke context
+oc delete application dallas-multicloudops-group-one -n openshift-gitops
+```
+
+ArgoCD's cascade-delete finalizer (`resources-finalizer.argocd.argoproj.io`) will attempt to
+delete all child apps automatically. Monitor progress:
+
+```bash
+watch oc get application -n dallas-multicloudops-group-one
+```
+
+If the app-of-apps or any child app is stuck in Terminating (common with Trilio finalizers),
+force-remove the finalizer:
+
+```bash
+# Force-complete app-of-apps deletion if stuck
+oc patch application dallas-multicloudops-group-one -n openshift-gitops \
+  --type json -p '[{"op":"remove","path":"/metadata/finalizers"}]'
+
+# Force-complete any stuck child apps
+oc patch application trilio-operand -n dallas-multicloudops-group-one \
+  --type json -p '[{"op":"remove","path":"/metadata/finalizers"}]'
+oc patch application wordpress-restore -n dallas-multicloudops-group-one \
+  --type json -p '[{"op":"remove","path":"/metadata/finalizers"}]'
+oc patch application hello-world -n dallas-multicloudops-group-one \
+  --type json -p '[{"op":"remove","path":"/metadata/finalizers"}]'
+
+# Then delete any remaining child apps
+oc delete application --all -n dallas-multicloudops-group-one --ignore-not-found
+```
+
+#### Step 3 — Spoke: delete Trilio and wordpress-restore namespaces
+
+```bash
+# If TVM has a finalizer blocking namespace deletion:
+oc patch triliovaultmanager triliovault-manager -n trilio-system \
+  --type json -p '[{"op":"remove","path":"/metadata/finalizers"}]' 2>/dev/null || true
+
+oc delete namespace trilio-system --wait=false
+oc delete namespace wordpress-restore --wait=false
+```
+
+#### Step 4 — Spoke: remove OLM Subscription and CSV
+
+> Use `subscription.operators.coreos.com` — not `subscriptions.apps.open-cluster-management.io`
+> (that is ACM's channel subscription, unrelated to OLM).
+
+```bash
+oc delete subscription.operators.coreos.com k8s-triliovault \
+  -n openshift-operators --ignore-not-found
+oc delete csv k8s-triliovault-stable.5.2.0 \
+  -n openshift-operators --ignore-not-found
+```
+
+#### Step 5 — Spoke: delete Trilio CRDs (required for clean re-onboard)
+
+Trilio CRDs survive namespace deletion and must be explicitly removed so OLM re-registers them
+fresh on the next install.
+
+```bash
+oc get crd | grep trilio | awk '{print $1}' | xargs oc delete crd --ignore-not-found
+```
+
+#### Step 6 — (Optional) Remove ESO if testing full stack
+
+Keeping ESO saves ~5 minutes on re-onboard. Skip unless you need to test ESO installation.
+
+```bash
+oc delete subscription.operators.coreos.com golang-external-secrets \
+  -n openshift-operators --ignore-not-found
+```
+
+#### Step 6b — (Optional) Full teardown: remove ArgoCD operator itself
+
+The OpenShift GitOps operator (ArgoCD) was installed by ACM ConfigurationPolicy, not by
+ArgoCD, so it survives app-of-apps deletion. For a truly clean cluster state:
+
+```bash
+# Remove the ArgoCD operator
+oc delete subscription.operators.coreos.com openshift-gitops-operator \
+  -n openshift-operators --ignore-not-found
+
+# Remove the ArgoCD namespace (contains the openshift-gitops instance)
+oc delete namespace openshift-gitops --wait=false
+
+# Remove the group-one ArgoCD namespace
+oc delete namespace dallas-multicloudops-group-one --wait=false
+```
+
+> Only do this if you want to test ACM re-installing ArgoCD from scratch. For most re-onboard
+> tests, leaving ArgoCD in place is fine — ACM will re-create the app-of-apps in the existing
+> `openshift-gitops` instance when the label is re-applied.
+
+#### Step 7 — Hub: re-add the cluster label to trigger fresh onboarding
+
+```bash
+# On hub cluster context
+oc label managedcluster dr-cluster clusterGroup=group-one
+```
+
+ACM immediately re-pushes the app-of-apps to `openshift-gitops` on the spoke. The spoke ArgoCD
+then generates all child apps and the onboarding sequence begins.
+
+Monitor:
+```bash
+# On spoke context
+watch oc get application -n dallas-multicloudops-group-one
+watch oc get csv -n trilio-system
+```
+
+**What to observe during re-onboarding:**
+1. `dallas-multicloudops-group-one` app-of-apps appears in `openshift-gitops`
+2. Child apps appear in `dallas-multicloudops-group-one` namespace
+3. `oc get csv -n trilio-system` transitions: `Pending → Installing → Succeeded`
+4. `trilio-operand` shows `OutOfSync / Missing` (Layer 0 — expected, CRDs not yet registered)
+5. After workaround: TVM applied → child CRDs registered → ArgoCD sync succeeds
+6. `oc get triliovaultmanager -n trilio-system` → `Deployed`
+7. `oc get target trilio-s3-target -n trilio-system` → `Available`
 
 ### Talking Points
 - **One label, full stack.** The only action needed on the spoke after ODF is `oc label managedcluster`. ACM and ArgoCD do the rest — operator, operand, secrets, restore prerequisites.

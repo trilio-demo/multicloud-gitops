@@ -97,8 +97,8 @@ Each item maps to a deliverable in the Implementation Matrix below.
 | 6c | DR restore namespace (wordpress-restore) + Hook CR pre-provisioned via GitOps on all clusters | P1 — Done |
 | 7 | Continuous Restore via EventTarget: pre-stage PVCs on DR cluster from ConsistentBackupPlan for accelerated RTO | P1 — Not Started |
 | 8 | (Optional) Deploy a VM-based application (OpenShift Virtualization) | P2 — Deferred |
-| 9 | Upgrade to Trilio 5.3.x: adopt native license-via-Secret model; remove License Job workaround | P1 — Not Started |
-| 10 | Spoke onboarding: resolve OLM/ArgoCD race condition so trilio-operand self-heals without manual sync | P1 — Not Started |
+| 9 | Upgrade to Trilio 5.3.x: adopt native license-via-Secret model; remove License Job workaround | P1 — In Progress (manifests in hand) |
+| 10 | Spoke onboarding: resolve OLM/ArgoCD race condition so trilio-operand self-heals without manual sync | P1 — In Progress (design confirmed; implementation next) |
 
 ---
 
@@ -189,21 +189,23 @@ OpenShift Virtualization (KubeVirt/CNV) adds significant complexity (operator, D
 
 ### Req 9 — Upgrade to Trilio 5.3.x: Native License-via-Secret
 
-Trilio 5.3.0 introduces native support for license management via a Kubernetes Secret — the operator reads the license key directly from a named Secret, eliminating the need for the License CR. During an upgrade from 5.2.x, Trilio automatically converts the existing License CR to the new Secret-based model.
+Trilio 5.3.0 introduces native support for license management via a Kubernetes Secret — the operator reads the license key directly from a named Secret, eliminating the need for the License CR and the Job workaround. During an upgrade from 5.2.x, Trilio automatically converts the existing License CR to the new Secret-based model.
 
 **Impact on this pattern:**
-- The `trilio-license-job` (Job, ServiceAccount, Role, RoleBinding) can be removed from `charts/all/trilio-operand/`
-- The ESO ExternalSecret (`trilio-license-external-secret.yaml`) that syncs the key from Vault may be retained or simplified — the Secret it creates (`trilio-license`) should be the Secret that Trilio 5.3.x reads natively
-- This resolves the Helm/ESO ordering limitation that necessitated the Job workaround (see Learnings.md)
+- The ESO ExternalSecret (`trilio-license-external-secret.yaml`) is retained unchanged — the `trilio-license` Secret it creates from Vault is exactly what Trilio 5.3.x reads natively. No Vault path changes required.
+- The `trilio-license-job` (Job, ServiceAccount, Role, RoleBinding) is **preserved in the chart** — it provides a 5.2.x backward-compatibility path and is a valuable reference for the "declarative systems with runtime dependencies" pattern. The Job becomes a no-op on 5.3.x (License CR already handled natively) but does no harm.
+- The native 5.3.x License Secret reference is added to the TrilioVaultManager spec alongside the existing resources.
+- This resolves the Helm/ESO ordering limitation for 5.3.x while keeping the Job as living documentation and a fallback.
 
-**Implementation steps (pending Trilio 5.3.x YAML from vendor):**
-1. Obtain the 5.3.x TrilioVaultManager and License Secret spec from Trilio
-2. Update `charts/all/trilio-operand/` to remove the Job and adopt the native Secret reference
-3. Change OLM channel from `5.2.x` → `5.3.x` in `values-hub.yaml` and `values-group-one.yaml`
-4. Validate upgrade path: existing License CR converts automatically; no manual intervention required
-5. Update `Learnings.md` — the Job workaround section becomes historical
+**Status (2026-03-11):** 5.3.x manifests for the new License Secret and TrilioVaultManager spec are in hand. Ready to implement.
 
-**Current state:** Pinned to `5.2.x` channel (OLM will not auto-upgrade) until this requirement is implemented. The vendor will supply the new YAML for the 5.3.x license model before implementation begins.
+**Implementation steps:**
+1. Add the 5.3.x native License Secret reference to the TrilioVaultManager spec in `charts/all/trilio-operand/`
+2. Change OLM channel from `5.2.x` → `5.3.x` in `values-hub.yaml` and `values-group-one.yaml`
+3. Validate upgrade path: existing License CR converts automatically on upgrade; no manual intervention required
+4. Add a `Learnings.md` section documenting the 5.3.x model and any upgrade gotchas; retain the Job workaround section as a reference pattern
+
+**Current state:** Pinned to `5.2.x` channel (OLM will not auto-upgrade). Implementation begins after Req 10 sync-wave fix is validated.
 
 ### Req 10 — Spoke Onboarding: Resolve OLM/ArgoCD Race Condition
 
@@ -217,9 +219,16 @@ When ACM bootstraps a new group-one spoke, ArgoCD syncs all applications immedia
 
 ArgoCD retries indefinitely but never self-recovers. Observed: attempt #7+ with no progress.
 
-**Confirmed fix:** Split the ExternalSecrets (`trilio-s3-credentials`, `trilio-license`) out of `charts/all/trilio-operand/` into a new dedicated ArgoCD application (e.g. `trilio-secrets`) that deploys before `trilio-operand`. Once ESO creates the secrets, the Trilio webhook is satisfied and `trilio-operand` syncs cleanly on the first try.
+**Confirmed fix:** Split the ExternalSecrets (`trilio-s3-credentials`, `trilio-license`) out of `charts/all/trilio-operand/` into a new dedicated ArgoCD application (`trilio-secrets`) that syncs before `trilio-operand` using ArgoCD sync waves. Once ESO creates the secrets, the Trilio webhook is satisfied and `trilio-operand` syncs cleanly on the first try.
 
-**Current workaround:** Manually render and apply the ExternalSecrets to break the deadlock, then trigger a sync. See `Learnings.md` onboarding Known Issue section for the exact commands.
+**Implementation approach (2026-03-11):**
+1. Create `charts/all/trilio-secrets/` containing only the two ExternalSecret templates (extracted from `trilio-operand`)
+2. Add `trilio-secrets` as a new application in `values-group-one.yaml` with `argocd.argoproj.io/sync-wave: "-1"` annotation so it deploys before all other applications
+3. Remove the ExternalSecret templates from `charts/all/trilio-operand/` (they now live in `trilio-secrets`)
+4. `trilio-operand` remains at default sync-wave 0 — it will only attempt to sync after `trilio-secrets` (and ESO) have run
+5. Validate on a fresh spoke onboard: `trilio-operand` should sync cleanly without the manual workaround
+
+**Current workaround:** Manually render and apply the ExternalSecrets to break the deadlock, then trigger a sync. See `Learnings.md` onboarding Known Issue section for exact commands and debugging runbook.
 
 ---
 
@@ -306,6 +315,8 @@ All pattern bootstrap and operational tooling runs inside the **Red Hat Validate
 | Accelerated restore from pre-staged Consistent Set | ansible/playbooks/dr-restore.yaml (ConsistentSet target) | Restore completes with metadata-only fetch; significantly faster than standard path | Not Started |
 | DR trigger mechanism (Annual DR Test) | TBD — documented runbook or ACM scheduled policy invoking dr-test.yaml | DR test invocable by single command or automated trigger | Not Started |
 | (Optional) VM-based application | Deferred — OpenShift Virtualization / KubeVirt | VM restores in stopped state; operator verifies before starting | Deferred |
+| Spoke onboarding race condition (Req 10) | `charts/all/trilio-secrets/` new app (sync-wave -1) with ExternalSecrets only; `trilio-operand` at wave 0; ExternalSecret templates removed from `trilio-operand` chart | Fresh spoke onboard: `trilio-operand` syncs clean on first try with no manual workaround | In Progress |
+| Trilio 5.3.x native license-via-Secret (Req 9) | Add 5.3.x License Secret ref to TVM spec; bump OLM channel to 5.3.x; retain Job for 5.2.x backwards compatibility | Upgrade validates automatically; License CR converts; no manual steps | In Progress (manifests in hand) |
 
 > Update this table as new requirements are implemented and validated.
 
