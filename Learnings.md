@@ -21,6 +21,13 @@ This is the end-to-end chain of events that occurs when a new cluster is attache
 1. ODF installed and a CSI StorageClass set as the cluster default (Trilio requires the CSI snapshot API)
 2. Vault on the hub is already populated (`secret/global/trilio-license`, `secret/global/trilio-s3`) — this was done at hub bootstrap and persists for all future spokes
 
+<!-- TODO: Replace the ASCII flow below with a Mermaid flowchart diagram.
+     Mermaid renders natively on GitHub (```mermaid fenced block).
+     Suggested diagram: flowchart TD covering the 10-step onboarding sequence,
+     with a subgraph for the sync-wave split (trilio-secrets wave -1 →
+     trilio-operand wave 0) and a red/dashed path for the Layer 0/1/2 failure
+     modes that SkipDryRunOnMissingResource now handles. -->
+
 ### The Onboarding Sequence
 
 ```
