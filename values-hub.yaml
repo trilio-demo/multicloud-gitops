@@ -80,6 +80,17 @@ clusterGroup:
       namespace: hello-world
       argoProject: hello-world
       path: charts/all/hello-world
+    # Req 10 (Option A): trilio-secrets at wave -1 ensures ESO creates S3 and
+    # license Secrets before trilio-operand (wave 0) applies the BackupTarget.
+    # Mirrors the spoke config. Brief delete/recreate of ExternalSecrets during
+    # first sync after this change is added — self-heals within ~60s.
+    trilio-secrets:
+      name: trilio-secrets
+      namespace: trilio-system
+      argoProject: trilio-operand
+      path: charts/all/trilio-secrets
+      annotations:
+        argocd.argoproj.io/sync-wave: "-1"
     trilio-operand:
       name: trilio-operand
       namespace: trilio-system
@@ -88,6 +99,12 @@ clusterGroup:
       overrides:
         - name: backupTarget.bucketName
           value: sa-demo-2
+      syncPolicy:
+        automated: {}
+        retry:
+          limit: 20
+        syncOptions:
+          - SkipDryRunOnMissingResource=true
     wordpress:
       name: wordpress
       namespace: wordpress

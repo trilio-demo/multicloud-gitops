@@ -710,4 +710,62 @@ kubectl explain restore.spec --api-version=triliovault.trilio.io/v1
 ```
 
 ---
+
+## Hub Rebuild While Spoke Remains Active
+
+When the hub cluster is torn down and rebuilt (e.g. to test a full pattern reinstall), a spoke
+cluster that was previously onboarded (`clusterGroup=group-one`) continues to operate normally.
+
+### What survives on the spoke
+
+| Resource | Fate during hub rebuild | Notes |
+|----------|------------------------|-------|
+| Trilio operator (OLM) | **Survives** — installed locally via OLM | OLM is self-managed on the spoke |
+| TrilioVaultManager CR | **Survives** | Deployed by spoke ArgoCD |
+| BackupTarget CR | **Survives** — stays `Available` | No hub dependency at runtime |
+| Kubernetes Secrets (`aws-s3-login`, `trilio-license`) | **Survive** | Already in etcd; ESO can't refresh but they're still there |
+| Spoke ArgoCD apps | **Survive and keep syncing** | Spoke ArgoCD has its own Git repo URL/branch; hub outage is irrelevant |
+| ESO ClusterSecretStore | Goes `InvalidProviderConfig` | Vault on hub is gone; ESO can't authenticate |
+
+### ESO behaviour during hub outage
+
+ESO will fail to refresh secrets on its next refresh cycle (5m for S3, 1h for license). The
+existing Secrets remain in the cluster — Trilio uses them from etcd, not by calling ESO directly.
+No Trilio disruption occurs unless the Secrets are explicitly deleted.
+
+### Re-importing the spoke after hub rebuild
+
+```
+Hub make install completes (Vault rebuilt, ACM rebuilt)
+      │
+      ▼
+Vault Kubernetes auth backends start empty
+      │
+      ▼
+oc label managedcluster <spoke-name> clusterGroup=group-one
+      │
+      ▼
+ACM policies reconcile (idempotent):
+  - GitOps bootstrap: ArgoCD already exists on spoke → no-op
+  - ArgoCD configuration: repo URL/branch already set → no-op
+  - Spoke ArgoCD apps: already Synced → no drift detected
+      │
+      ▼
+Hub imperative framework registers spoke with Vault (~5-10 min)
+      │
+      ▼
+ESO vault-backend: InvalidProviderConfig → Valid (self-heals)
+ESO refreshes Secrets (no disruption — existing values are the same)
+      │
+      ▼
+Full steady state restored — no manual steps on the spoke required
+```
+
+### Key insight
+
+The spoke is **self-sufficient** once bootstrapped. Hub connectivity is only required for:
+- Initial Vault secret sync (bootstrap)
+- Periodic ESO secret refresh (operational)
+
+Hub downtime does not affect Trilio backup/restore operations already running on the spoke.
 *Update this file as new insights are discovered or existing patterns are refined.*
