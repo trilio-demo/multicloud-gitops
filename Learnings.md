@@ -26,7 +26,21 @@ This is the end-to-end chain of events that occurs when a new cluster is attache
      Suggested diagram: flowchart TD covering the 10-step onboarding sequence,
      with a subgraph for the sync-wave split (trilio-secrets wave -1 →
      trilio-operand wave 0) and a red/dashed path for the Layer 0/1/2 failure
-     modes that SkipDryRunOnMissingResource now handles. -->
+     modes that SkipDryRunOnMissingResource now handles.
+
+     Annotate each step with observed elapsed times (validated 2026-03-13):
+       label applied        → ACM PlacementRule match:        ~1 min
+       ACM match            → ArgoCD bootstrap on spoke:      ~2-3 min
+       ArgoCD bootstrap     → app-of-apps sync:               ~1-2 min
+       app-of-apps sync     → OLM CSV Succeeded (Trilio):     ~3-5 min
+       app-of-apps sync     → Vault Kubernetes auth ready:    ~5-10 min (async,
+                              hub imperative framework registers spoke cluster;
+                              ESO shows InvalidProviderConfig until this completes —
+                              this is expected, not an error)
+       Vault auth ready     → ESO SecretSynced (S3 creds):    up to 5 min (refresh interval)
+       TVM applied          → child CRDs registered:          ~2-3 min
+       Secrets present      → BackupTarget Available:         ~1-2 min
+       Total cold-start:    ~15-25 min end-to-end with no manual intervention -->
 
 ### The Onboarding Sequence
 
