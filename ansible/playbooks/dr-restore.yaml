@@ -20,6 +20,9 @@
 #                   the Validated Pattern DR failover — Trilio continuously stages
 #                   a ready-to-use consistent snapshot on the DR cluster so failover
 #                   requires no on-demand backup step.
+#                   NOTE: ConsistentSet restores require a post-restore URL rewrite
+#                   step.  This playbook applies it directly via database exec after
+#                   the restore completes (see section 10 below).
 #
 # Trilio CRs involved:
 #   Restore          - references the backup source and drives the restore
@@ -82,8 +85,9 @@
 # Hook + Transform variables (WordPress DR):
 #   restore_hook_name:    name of the Hook CR pre-deployed in restore_namespace
 #                         (default: wordpress-restore-hook)
-#                         The Hook CR must exist before restore starts. It runs
-#                         post-restore to update MySQL wp_options siteurl/home.
+#                         Used for backup/location methods only.
+#                         For consistentset, URL rewrite is applied via direct
+#                         database exec (section 10) — no Hook CR required.
 #   cluster_domain:       (optional override) apps domain of the DR cluster.
 #                         If omitted, auto-discovered from the cluster:
 #                           oc get ingresses.config cluster -o jsonpath='{.spec.domain}'
@@ -304,10 +308,15 @@
     - name: Show hook detection result
       ansible.builtin.debug:
         msg: >-
-          {{ 'Restore Hook CR found: hookConfig will be included.' if _hook_found
-             else 'WARNING: Hook CR ' + restore_hook_name + ' not found in '
-                  + restore_namespace + ' — proceeding without hookConfig.
-                  MySQL wp_options will NOT be updated post-restore.' }}
+          {% if restore_method == 'consistentset' %}
+          ConsistentSet restore: Hook CR support is a planned enhancement (see PRD Req 7a).
+          Post-restore URL rewrite is applied via direct database exec in section 10.
+          {% elif _hook_found %}
+          Restore Hook CR found: hookConfig will be included.
+          {% else %}
+          WARNING: Hook CR {{ restore_hook_name }} not found in {{ restore_namespace }}
+          — proceeding without hookConfig.  MySQL wp_options will NOT be updated post-restore.
+          {% endif %}
 
     # -------------------------------------------------------------------------
     # 7. Build Restore CR spec — source varies by method
@@ -321,6 +330,8 @@
     #    hookConfig:         references the pre-deployed Hook CR by name;
     #                        targets wordpress-mysql pods; runs post-restore
     #                        to update MySQL wp_options URLs.
+    #                        Applied for backup/location methods only.
+    #                        ConsistentSet hook support is a planned enhancement (Req 7a).
     #
     #    restoreFlags:       skipIfAlreadyExists prevents errors when restore
     #                        namespace already has pre-existing resources.
@@ -366,8 +377,8 @@
             skipIfAlreadyExists: true
           source: "{{ _restore_source }}"
 
-    - name: Add hookConfig to Restore CR spec (Hook CR found)
-      when: _hook_found | bool
+    - name: Add hookConfig to Restore CR spec (Hook CR found, backup/location methods only)
+      when: _hook_found | bool and restore_method != 'consistentset'
       ansible.builtin.set_fact:
         _restore_spec: >-
           {{ _restore_spec | combine({
@@ -480,11 +491,6 @@
     # 9. (Optional) Validate restored pods come up Running
     #    This is the end-to-end application health check — confirming the data
     #    path, not just Kubernetes object creation.
-    #
-    #    Note: if a post-restore Hook CR exists in restore_namespace (e.g. the
-    #    WordPress Hook that rewrites wp_options siteurl/home to the DR cluster
-    #    URL), Trilio executes it automatically before pods fully come up.
-    #    This pod-running check happens after hooks have completed.
     # -------------------------------------------------------------------------
     - name: Validate restored pods are Running
       when: validate_pods | bool
@@ -520,6 +526,48 @@
             success_msg: >
               PASS: All {{ pods_result.resources | length }} pods in
               {{ restore_namespace }} are Running after restore.
+
+    # -------------------------------------------------------------------------
+    # 10. ConsistentSet: post-restore URL rewrite via direct database exec
+    #     ConsistentSet restores require the MySQL wp_options siteurl/home values
+    #     to be updated to the DR cluster URL.  This step runs the SQL directly
+    #     inside the MySQL container after the restore is confirmed complete.
+    # -------------------------------------------------------------------------
+    - name: Apply post-restore URL rewrite (method=consistentset)
+      when: restore_method == 'consistentset'
+      block:
+
+        - name: Find MySQL pod in {{ restore_namespace }}
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            namespace: "{{ restore_namespace }}"
+            label_selectors:
+              - "app=wordpress-mysql"
+          register: _mysql_pods
+          until: >
+            _mysql_pods.resources | length > 0 and
+            (_mysql_pods.resources[0].status.phase | default('')) == 'Running'
+          retries: 18
+          delay: 10
+          failed_when: _mysql_pods.resources | length == 0
+
+        - name: Rewrite wp_options URLs to DR cluster URL
+          kubernetes.core.k8s_exec:
+            namespace: "{{ restore_namespace }}"
+            pod: "{{ _mysql_pods.resources[0].metadata.name }}"
+            command:
+              - bash
+              - -c
+              - >-
+                mysql -u root --password=$MYSQL_ROOT_PASSWORD wordpress -Bse
+                "UPDATE wp_options SET option_value='http://{{ _route_hostname }}'
+                WHERE option_name IN ('siteurl','home')"
+          register: _wp_options_result
+
+        - name: Confirm URL rewrite applied
+          ansible.builtin.debug:
+            msg: "wp_options siteurl/home updated to http://{{ _route_hostname }}"
 
     - name: Restore workflow complete
       ansible.builtin.debug:

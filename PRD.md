@@ -95,7 +95,8 @@ Each item maps to a deliverable in the Implementation Matrix below.
 | 6a | Route hostname transform inline in Restore CR via transformComponents | P1 — Done |
 | 6b | Post-restore MySQL Hook CR (wordpress-restore-hook) for wp_options URL rewrite | P1 — Partial (manual deploy works; GitOps automation pending via 6c) |
 | 6c | DR restore namespace (wordpress-restore) + Hook CR pre-provisioned via GitOps on all clusters | P1 — Done |
-| 7 | Continuous Restore via EventTarget: pre-stage PVCs on DR cluster from ConsistentBackupPlan for accelerated RTO | P1 — Not Started |
+| 7 | Continuous Restore via EventTarget: pre-stage PVCs on DR cluster from ConsistentBackupPlan for accelerated RTO | P1 — Done |
+| 7a | Hook CR support for ConsistentSet restores: post-restore URL rewrite via hookConfig (currently applied via direct database exec) | P2 — Not Started |
 | 8 | (Optional) Deploy a VM-based application (OpenShift Virtualization) | P2 — Deferred |
 | 9 | Upgrade to Trilio 5.3.x: adopt native license-via-Secret model; remove License Job workaround | P1 — In Progress (manifests in hand) |
 | 10 | Spoke onboarding: resolve OLM/ArgoCD race condition so trilio-operand self-heals without manual sync | P1 — Done |
@@ -183,6 +184,12 @@ EventTarget pod running                           │ DR Test triggered
                                          App running with local PVC data
                                          + Transform applied (Route/Ingress)
 ```
+
+### Req 7a — Hook CR Support for ConsistentSet Restores
+
+For standard backup/location restores, the `dr-restore.yaml` playbook includes a pre-deployed `Hook` CR in the Restore CR's `hookConfig` — this causes Trilio to automatically execute the MySQL wp_options URL rewrite post-restore. For ConsistentSet restores, the playbook achieves the same result via a direct `kubectl exec` into the MySQL container (section 10 of the playbook). Both paths produce an identical outcome.
+
+Adding `hookConfig` support for ConsistentSet restores would unify the two code paths and eliminate the direct exec step. This is a planned enhancement for a future iteration.
 
 ### Req 8 — VM Application (Deferred)
 OpenShift Virtualization (KubeVirt/CNV) adds significant complexity (operator, DataVolumes, potentially build pipelines). A simple RHEL or Fedora appliance VM avoids Windows licensing friction. Deferred to a future iteration; flagged as a stretch goal for customer POC demos. If implemented, the VM should be brought up in a `stopped` state post-restore so the operator can verify before starting.
@@ -309,10 +316,10 @@ All pattern bootstrap and operational tooling runs inside the **Red Hat Validate
 | Post-restore Route transform (hostname patch) | dr-restore.yaml `transformComponents` — `{{ restore_namespace }}.{{ ingress_domain }}`; ingress domain auto-discovered from `config.openshift.io/v1 Ingress/cluster`; no separate Transform CR needed | Route hostname updated inline during restore | Validated 2026-03-06 |
 | Post-restore MySQL Hook (wp_options URL rewrite) | wordpress-restore-hook Hook CR pre-deployed in restore namespace; dr-restore.yaml detects and includes in hookConfig if present | MySQL wp_options siteurl/home updated to DR URL post-restore | Validated 2026-03-10; GitOps automation complete (Req 6c) |
 | wordpress-restore namespace + RBAC pre-provisioned via GitOps | charts/all/wordpress-restore/ — deploys namespace, wordpress-sa SA, anyuid RoleBinding, wordpress-restore-hook Hook CR; wired into values-hub.yaml + values-group-one.yaml; hook URL rendered from global.localClusterDomain | wordpress-restore NS + Hook CR + RBAC pre-exist on all clusters before restore | Done 2026-03-10 |
-| ConsistentBackupPlan (multi-app atomic backup) | TBD — ConsistentBackupPlan CR | Multi-namespace backup completes atomically | Not Started |
-| EventTarget flag on DR cluster BackupTarget | BackupTarget CR (eventTarget: true) on DR cluster | EventTarget pod running in trilio-system on DR cluster | Not Started |
-| PVC pre-staging via EventTarget pod | Automatic (driven by EventTarget pod monitoring BackupTarget) | PVCs visible on DR cluster after new backup detected; data local | Not Started |
-| Accelerated restore from pre-staged Consistent Set | ansible/playbooks/dr-restore.yaml (ConsistentSet target) | Restore completes with metadata-only fetch; significantly faster than standard path | Not Started |
+| CR BackupPlan (ContinuousRestore-enabled) | `enable-continuous-restore.yaml` playbook — discovers spoke instanceID from Target CR `status.availableContinuousRestoreInstances`; creates ContinuousRestore Policy (consistentSets=3) and CR-enabled BackupPlan in `wordpress` ns; Ansible-owned (no ArgoCD tracking) | BackupPlan `wordpress-backup-plan-cr` reached `Available`; backup created via `dr-backup.yaml -e backupplan_name=wordpress-backup-plan-cr` | Done 2026-03-14 |
+| EventTarget flag on DR cluster BackupTarget | BackupTarget CR `trilio.io/event-target: "true"` annotation set on all clusters (Req 3) | EventTarget pod running in `trilio-system` on DR cluster | Done (Req 3) |
+| PVC pre-staging via EventTarget pod | Automatic — EventTarget pod monitors shared S3 BackupTarget for new CR backups | ConsistentSet CR created on DR cluster (ocp-dc12) after CR-enabled backup | Done 2026-03-14 |
+| Accelerated restore from pre-staged Consistent Set | ansible/playbooks/dr-restore.yaml `-e restore_method=consistentset -e consistent_set_name=<name>`; post-restore URL rewrite via direct database exec (Hook CR support planned, Req 7a) | Restore completed; Route hostname correct; MySQL wp_options updated via direct exec; WordPress accessible at DR URL | Done 2026-03-13 |
 | DR trigger mechanism (Annual DR Test) | TBD — documented runbook or ACM scheduled policy invoking dr-test.yaml | DR test invocable by single command or automated trigger | Not Started |
 | (Optional) VM-based application | Deferred — OpenShift Virtualization / KubeVirt | VM restores in stopped state; operator verifies before starting | Deferred |
 | Spoke onboarding race condition (Req 10) | `charts/all/trilio-secrets/` new app (sync-wave -1) with ExternalSecrets only; `trilio-operand` at wave 0 with `SkipDryRunOnMissingResource=true`; ExternalSecret templates removed from `trilio-operand` chart | Fresh spoke onboard completes fully automatically with no manual workaround — validated 2026-03-13 on ocp-dc12 | Done |
@@ -332,6 +339,7 @@ All pattern bootstrap and operational tooling runs inside the **Red Hat Validate
 | `ansible/playbooks/validate-trilio.yaml` | Pre-flight health check (CSV, TVM, License, pods) | Validated |
 | `ansible/playbooks/dr-backup.yaml` | Verify existing BackupPlan + create Backup CR, poll to completion | Validated 2026-03-05 |
 | `ansible/playbooks/dr-restore.yaml` | Create Restore CR (backup/location/consistentset), auto-discover Route hostname, optional hookConfig, poll to completion, validate pods | Validated 2026-03-06 (backup method) |
+| `ansible/playbooks/enable-continuous-restore.yaml` | Discover spoke instanceID from Target CR status; create ContinuousRestore Policy + CR-enabled BackupPlan (Ansible-owned, not ArgoCD-managed) | Done 2026-03-14 |
 | `ansible/playbooks/dr-test.yaml` | Annual DR Test — backup + pre-staged restore + transform end-to-end | Not Started |
 
 ---
