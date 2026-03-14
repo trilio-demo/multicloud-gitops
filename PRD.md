@@ -98,7 +98,7 @@ Each item maps to a deliverable in the Implementation Matrix below.
 | 7 | Continuous Restore via EventTarget: pre-stage PVCs on DR cluster from ConsistentBackupPlan for accelerated RTO | P1 — Not Started |
 | 8 | (Optional) Deploy a VM-based application (OpenShift Virtualization) | P2 — Deferred |
 | 9 | Upgrade to Trilio 5.3.x: adopt native license-via-Secret model; remove License Job workaround | P1 — In Progress (manifests in hand) |
-| 10 | Spoke onboarding: resolve OLM/ArgoCD race condition so trilio-operand self-heals without manual sync | P1 — In Progress (design confirmed; implementation next) |
+| 10 | Spoke onboarding: resolve OLM/ArgoCD race condition so trilio-operand self-heals without manual sync | P1 — Done |
 
 ---
 
@@ -315,7 +315,7 @@ All pattern bootstrap and operational tooling runs inside the **Red Hat Validate
 | Accelerated restore from pre-staged Consistent Set | ansible/playbooks/dr-restore.yaml (ConsistentSet target) | Restore completes with metadata-only fetch; significantly faster than standard path | Not Started |
 | DR trigger mechanism (Annual DR Test) | TBD — documented runbook or ACM scheduled policy invoking dr-test.yaml | DR test invocable by single command or automated trigger | Not Started |
 | (Optional) VM-based application | Deferred — OpenShift Virtualization / KubeVirt | VM restores in stopped state; operator verifies before starting | Deferred |
-| Spoke onboarding race condition (Req 10) | `charts/all/trilio-secrets/` new app (sync-wave -1) with ExternalSecrets only; `trilio-operand` at wave 0; ExternalSecret templates removed from `trilio-operand` chart | Fresh spoke onboard: `trilio-operand` syncs clean on first try with no manual workaround | In Progress |
+| Spoke onboarding race condition (Req 10) | `charts/all/trilio-secrets/` new app (sync-wave -1) with ExternalSecrets only; `trilio-operand` at wave 0 with `SkipDryRunOnMissingResource=true`; ExternalSecret templates removed from `trilio-operand` chart | Fresh spoke onboard completes fully automatically with no manual workaround — validated 2026-03-13 on ocp-dc12 | Done |
 | Trilio 5.3.x native license-via-Secret (Req 9) | Add 5.3.x License Secret ref to TVM spec; bump OLM channel to 5.3.x; retain Job for 5.2.x backwards compatibility | Upgrade validates automatically; License CR converts; no manual steps | In Progress (manifests in hand) |
 
 > Update this table as new requirements are implemented and validated.
