@@ -8,10 +8,13 @@ spec:
   componentConfiguration:
     ingress-controller:
       enabled: false
-  dataJobResources:
-    requests:
-      cpu: 100m
-      memory: 800Mi
+  # dataJobResources: commented out to use Trilio defaults.
+  # Uncomment and tune for resource-constrained lab environments
+  # (e.g. shared RHPDS clusters where metamover pods need capped CPU/memory):
+  # dataJobResources:
+  #   requests:
+  #     cpu: 100m
+  #     memory: 800Mi
   helmValues:
     pollingIntervals:
       manager: 30s
