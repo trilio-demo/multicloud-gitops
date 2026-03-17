@@ -100,6 +100,11 @@ Each item maps to a deliverable in the Implementation Matrix below.
 | 8 | (Optional) Deploy a VM-based application (OpenShift Virtualization) | P2 — Deferred |
 | 9 | Upgrade to Trilio 5.3.x: adopt native license-via-Secret model; remove License Job workaround | P1 — In Progress (manifests in hand) |
 | 10 | Spoke onboarding: resolve OLM/ArgoCD race condition so trilio-operand self-heals without manual sync | P1 — Done |
+| 11 | Pattern documentation (`Document.md`) for publication on validatedpatterns.io — comprehensive usage manual for pattern adopters | P1 — Not Started |
+| 12 | Imperative Framework Automation: full E2E DR lifecycle driven by VP imperative jobs — backup on hub ready, enable Continuous Restore when DR cluster joins, restore + validate when ConsistentSet present, alert on success/failure | P0 — Not Started |
+| 13 | VP Uninstall: validate Pattern CR deletion teardown; document finalizer cleanup; confirm ODF is preserved; verify spoke disassociation from ACM | P2 — Not Started |
+| 14 | Remove multicloud-gitops upstream overhead (hello-world, config-demo, RHDP-specific workflows where appropriate); retain or comment items with future value; document every decision | P1 — Not Started |
+| 15 | Publish clean pattern to new public GitHub repo `trilio-continuous-restore`: update all metadata, RHDP workflow references, pattern name throughout; disconnect from multicloud-gitops lineage while preserving VP framework compatibility | P1 — Not Started |
 
 ---
 
@@ -190,6 +195,237 @@ EventTarget pod running                           │ DR Test triggered
 For standard backup/location restores, the `dr-restore.yaml` playbook includes a pre-deployed `Hook` CR in the Restore CR's `hookConfig` — this causes Trilio to automatically execute the MySQL wp_options URL rewrite post-restore. For ConsistentSet restores, the playbook achieves the same result via a direct `kubectl exec` into the MySQL container (section 10 of the playbook). Both paths produce an identical outcome.
 
 Adding `hookConfig` support for ConsistentSet restores would unify the two code paths and eliminate the direct exec step. This is a planned enhancement for a future iteration.
+
+### Req 11 — Pattern Documentation for validatedpatterns.io
+
+A `Document.md` file in the repo root that serves as the canonical usage manual for pattern adopters. This file is pulled by the Red Hat Validated Patterns team to publish on validatedpatterns.io.
+
+**Audience:** Operators, architects, and developers who want to deploy and use the pattern — not contributors writing PRD-level detail.
+
+**Required sections:**
+- Pattern overview and use case
+- Architecture: hub vs. spoke roles, key components, how Trilio integrates with the Validated Patterns framework
+- Pre-requisites and environment requirements
+- Deployment walkthrough: `make install`, secret population, cluster labelling
+- Operational guide: how to trigger backup, DR restore (standard and Continuous Restore paths), and the Annual DR Test
+- Ansible playbook reference (inputs, outputs, when to use each)
+- Troubleshooting: top failure modes with diagnostic commands
+- Links to upstream Trilio documentation and Red Hat Validated Patterns resources
+
+**Constraints:** Must not duplicate `PRD.md` (internal requirements) or `Learnings.md` (contributor gotchas). Length target: readable in under 20 minutes.
+
+---
+
+### Req 12 — Imperative Framework Automation (E2E DR Lifecycle)
+
+**Priority: P0 — This is the primary automated validation path for the pattern.**
+
+The VP imperative framework executes Ansible playbooks as Kubernetes Jobs on a schedule (default: every 10 minutes) using the `imperative.jobs` list in `values-hub.yaml`. This enables fully automated, cluster-driven DR lifecycle management with no human intervention required after initial cluster provisioning.
+
+#### Design Goals
+- Prove the pattern is fully automated, not just scripted — the cluster drives the workflow
+- Serve as the continuous E2E test harness: run after every code change to validate the full DR path
+- Enable demo scenarios where the full hub + spoke DR workflow completes automatically in ~30 minutes after clusters are up
+- Alert on success or failure so operators know when DR readiness changes
+
+#### Workflow Phases
+
+**Phase 1 — Hub Ready: Ensure a backup exists**
+
+Trigger: Hub cluster is up, Trilio TVM is healthy, WordPress is running.
+
+Jobs:
+1. `imperative-validate` — poll until CSV Succeeded + TVM Deployed/Updated + License present + BackupTarget Available; fail fast with diagnostic output if not ready within timeout
+2. `imperative-backup` — check if any Available Backup exists for `wordpress-backup-plan-cr` (the CR BackupPlan); if none, create one; wait for Available; idempotent (skips if backup already present)
+
+**Phase 2 — DR Cluster Joins: Enable Continuous Restore**
+
+Trigger: ACM detects a cluster with label `clusterGroup=group-one` that does not yet have an Available ConsistentSet on the shared BackupTarget.
+
+Jobs:
+3. `imperative-enable-cr` — wraps `enable-continuous-restore.yaml`; runs on hub with DR cluster context; retries until CR BackupPlan Available; idempotent (skips if CR BackupPlan already present and Available)
+4. `imperative-wait-cs` — poll BackupTarget on DR cluster until at least one ConsistentSet is Available; timeout with alert
+
+**Phase 3 — DR Test: Restore and Validate**
+
+Trigger: ConsistentSet Available on DR cluster.
+
+Jobs:
+5. `imperative-restore` — wraps `dr-restore.yaml -e restore_method=consistentset`; targets most recent Available ConsistentSet; waits for Restore Completed; applies Route transform
+6. `imperative-validate-restore` — curl WordPress at DR URL; confirm HTTP 200; verify wp_options siteurl/home match DR URL; output PASS/FAIL with timestamp
+
+**Phase 4 — Alert**
+
+7. `imperative-alert` — post result summary (cluster name, backup name, ConsistentSet name, restore name, pass/fail, elapsed time) to a configured output (log, Slack webhook, or ACM policy status)
+
+#### Implementation Notes
+- Each phase is a separate playbook in `ansible/playbooks/` prefixed `imperative-*.yaml`
+- Playbooks must be idempotent — repeated runs produce the same result without side effects
+- Each job declares `timeout` in seconds; total `activeDeadlineSeconds` covers the full pipeline (~2 hours for cold-start)
+- The `imperative.schedule` in `values-hub.yaml` drives Phase 1 continuously; Phase 2–4 are edge-triggered (run once when condition first satisfied) — implement with a flag ConfigMap or Backup/ConsistentSet existence check to avoid re-running on every schedule tick
+- DR cluster context must be available to hub-side imperative jobs: store the DR cluster kubeconfig in Vault at `secret/global/dr-cluster-kubeconfig`; ESO ExternalSecret loads it into a Secret consumed by the imperative Job Pod
+
+#### New Playbooks Required
+| Playbook | Phase | Description |
+|----------|-------|-------------|
+| `ansible/playbooks/imperative-validate.yaml` | 1 | Pre-flight health check (CSV, TVM, License, BackupTarget) |
+| `ansible/playbooks/imperative-backup.yaml` | 1 | Ensure Available backup exists; create if absent |
+| `ansible/playbooks/imperative-enable-cr.yaml` | 2 | Enable Continuous Restore on DR cluster (idempotent) |
+| `ansible/playbooks/imperative-wait-cs.yaml` | 2 | Poll for Available ConsistentSet on DR cluster |
+| `ansible/playbooks/imperative-restore.yaml` | 3 | Restore from ConsistentSet; apply Route transform |
+| `ansible/playbooks/imperative-validate-restore.yaml` | 3 | Verify WordPress accessible at DR URL |
+| `ansible/playbooks/imperative-alert.yaml` | 4 | Emit structured pass/fail result |
+
+#### `values-hub.yaml` imperative.jobs additions (sketch)
+```yaml
+imperative:
+  jobs:
+    - name: imperative-validate
+      playbook: ansible/playbooks/imperative-validate.yaml
+      timeout: 600
+    - name: imperative-backup
+      playbook: ansible/playbooks/imperative-backup.yaml
+      timeout: 1800
+    - name: imperative-enable-cr
+      playbook: ansible/playbooks/imperative-enable-cr.yaml
+      timeout: 600
+    - name: imperative-wait-cs
+      playbook: ansible/playbooks/imperative-wait-cs.yaml
+      timeout: 3600
+    - name: imperative-restore
+      playbook: ansible/playbooks/imperative-restore.yaml
+      timeout: 1800
+    - name: imperative-validate-restore
+      playbook: ansible/playbooks/imperative-validate-restore.yaml
+      timeout: 300
+    - name: imperative-alert
+      playbook: ansible/playbooks/imperative-alert.yaml
+      timeout: 120
+```
+
+---
+
+### Req 11 — Pattern Documentation for validatedpatterns.io
+
+A `Document.md` file in the repo root that serves as the canonical usage manual for pattern adopters. This file is intended to be pulled by the Red Hat Validated Patterns team for publication on validatedpatterns.io.
+
+**Audience:** Operators, architects, and developers who want to deploy and use the pattern — not contributors writing PRD-level detail.
+
+**Required sections:**
+- Pattern overview and use case
+- Architecture: hub vs. spoke roles, key components, how Trilio integrates with the Validated Patterns framework
+- Architecture diagram placeholder — a draw.io diagram file will be added to the repo separately and referenced here
+- Pre-requisites and environment requirements
+- Deployment walkthrough: `make install`, secret population, cluster labelling
+- Operational guide: how to trigger backup, DR restore (standard and Continuous Restore paths), and the Annual DR Test
+- Ansible playbook reference (inputs, outputs, when to use each)
+- Troubleshooting: top failure modes with diagnostic commands
+- Links to upstream Trilio documentation and Red Hat Validated Patterns resources
+
+**Constraints:** Must not duplicate `PRD.md` (internal requirements) or `Learnings.md` (contributor gotchas). Length target: readable in under 20 minutes.
+
+---
+
+### Req 14 — Remove Multicloud-GitOps Upstream Overhead
+
+The pattern was bootstrapped from the `multicloud-gitops` upstream template and carries inherited artifacts that have no relevance to Trilio DR. These must be removed or documented before public publication. Every removal decision must be recorded — items with potential future value are commented or noted rather than silently deleted.
+
+**Remove entirely:**
+| Item | Path | Reason |
+|------|------|--------|
+| hello-world chart | `charts/all/hello-world/` | Demo app unrelated to Trilio DR |
+| hello-world references | `values-hub.yaml`, `values-group-one.yaml`, `values-standalone.yaml`, `values-4.2x-*.yaml` | Cleanup after chart removal |
+| hello-world Trivy exemptions | `.trivyignore` lines for AVD-KSV-0020/0021/0014/0125 | Apache container CVEs; not applicable without chart |
+| hello-world interop test | `tests/interop/test_modify_web_content.py` | Tests hello-world ConfigMap update; not Trilio |
+| config-demo chart | `charts/all/config-demo/` | Demo app; ESO/Vault validation covered by Trilio-specific tooling |
+| config-demo references | `values-hub.yaml`, `values-group-one.yaml`, `values-standalone.yaml` | Cleanup after chart removal |
+| values-standalone.yaml | `values-standalone.yaml` | Single-cluster topology not part of hub/spoke Trilio design |
+| charts/region/.keep | `charts/region/` | Empty placeholder from template |
+
+**Update (do not remove):**
+| Item | Path | Change Required |
+|------|------|-----------------|
+| values-global.yaml | `values-global.yaml` | Change `global.pattern` from `multicloud-gitops` to `trilio-gitops` |
+| pattern-metadata.yaml | `pattern-metadata.yaml` | Update name, display_name, repo_url, issues_url, docs_url, ci_url, owners |
+| ansible/site.yaml | `ansible/site.yaml` | Update comment from "MultiCloud-GitOps" to "Trilio GitOps" |
+| tests/interop/run_tests.sh | `tests/interop/run_tests.sh` | Change `PATTERN_NAME="MultiCloudGitops"` and `PATTERN_SHORTNAME="mcgitops"` |
+| RHDP sync workflow | `.github/workflows/sync-rhdp-branch.yml` | Update pattern name reference; keep workflow — pattern targets RHDP |
+| RHDP metadata workflow | `.github/workflows/update-metadata.yml` | Update pattern name in metadata reference; keep workflow |
+
+**Keep with comment explaining retention:**
+| Item | Path | Why Keep |
+|------|------|---------|
+| Version-specific values | `values-4.20-hub.yaml`, `values-4.20-group-one.yaml`, `values-4.21-*.yaml` | Required for OCP 4.20/4.21 ESO API version compatibility |
+| overrides/ directory | `overrides/values-AWS.yaml`, `values-IBMCloud.yaml` | VP sharedValueFiles mechanism; cloud-platform overrides are a useful extension point for future Trilio cloud-specific config |
+| tests/interop/ framework | `conftest.py`, hub/edge component tests, subscription tests | VP test harness; valuable for CI/CD validation — update PATTERN_NAME references only |
+| imperative framework | `values-hub.yaml` `imperative:` section | Powers Req 12 automation; critical to keep and extend |
+
+---
+
+### Req 13 — VP Uninstall: Teardown Validation
+
+The latest Validated Patterns framework supports pattern uninstall via deletion of the Pattern CR. Deleting the CR triggers a ~30-minute automated teardown of all pattern-managed resources.
+
+**Scope:**
+- Delete Pattern CR → framework removes all ArgoCD Applications, Subscriptions, and managed namespaces
+- ODF is **intentionally excluded** — ODF does not support removal after installation and should remain in place
+- Trilio operator should be removed (OLM Subscription deleted by framework)
+- Vault and ESO should be removed
+- ACM: spoke clusters should be gracefully disassociated (ManagedCluster detached), not deleted
+
+**Requirements:**
+1. Document the exact uninstall command and expected teardown sequence
+2. Identify any resources that retain finalizers after Pattern CR deletion and document the manual finalizer removal steps (e.g., `oc patch ... -p '{"metadata":{"finalizers":[]}}' --type=merge`)
+3. Confirm hub cluster is left in a clean state: no VP namespaces, no Trilio resources, no ArgoCD Applications for this pattern
+4. Confirm spoke cluster is disassociated from ACM hub and functional as a standalone cluster (Trilio uninstalled, ODF intact)
+5. Document which pre-requisites (ODF, pull secrets) persist after uninstall — these are the starting point for a fresh re-install
+
+**Out of scope:** ODF removal, OpenShift upgrade, or cluster decommission.
+
+---
+
+### Req 15 — Publish to New Public GitHub Repo: trilio-continuous-restore
+
+Create a clean, publicly accessible GitHub repository named **`trilio-continuous-restore`** for the Trilio GitOps Validated Pattern. This repo is the artifact delivered to Red Hat and Trilio for community and customer use.
+
+**Pre-requisites:** Req 14 (overhead removal) complete.
+
+**Scope:**
+- New repo name: `trilio-continuous-restore`
+- Org: TBD — either `validatedpatterns` if adopted by the RH VP team, or `trilio-demo` / partner org for interim publication
+- All content from `dallas` branch of this working repo, after Req 14 cleanup, forms the `main` branch of the new public repo
+- No internal working files, scratch notes, or lab-specific configuration visible in the new repo
+
+**Files to exclude from public repo (confirm these are already in .gitignore):**
+- `Team.md`
+- Any `values-secret.yaml` variants
+- `CLAUDE.md` (internal AI contributor instructions — decision: include or exclude?)
+- `.claude/` directory
+
+**RHDP Workflow decision point:**
+The `sync-rhdp-branch.yml` workflow has an org guard: `if: github.repository_owner == 'validatedpatterns'`. If the new public repo is under a different org, this workflow will silently no-op. Options:
+1. Update the org guard to match the new repo owner
+2. Remove the guard and rely on the `DOCS_TOKEN` secret being absent to prevent unintended triggers
+3. Coordinate with RH VP team to host under `validatedpatterns` org from day one
+
+**pattern-metadata.yaml must be fully updated before push:**
+- `name: trilio-continuous-restore`
+- `display_name: Trilio Continuous Restore`
+- `repo_url`: new public repo URL
+- `issues_url`: new public repo issues URL
+- `docs_url`: TBD (validatedpatterns.io page once published)
+- `ci_url`: TBD
+- `owners`: update to reflect Trilio + RH contacts
+
+**values-global.yaml:**
+- `global.pattern: trilio-continuous-restore`
+
+**Post-publication:**
+- Create a PR from `main` in new public repo to register in the VP patterns index
+- Notify RH VP team for documentation pull and validatedpatterns.io listing
+- `Document.md` (Req 11) serves as the primary onboarding document
+
+---
 
 ### Req 8 — VM Application (Deferred)
 OpenShift Virtualization (KubeVirt/CNV) adds significant complexity (operator, DataVolumes, potentially build pipelines). A simple RHEL or Fedora appliance VM avoids Windows licensing friction. Deferred to a future iteration; flagged as a stretch goal for customer POC demos. If implemented, the VM should be brought up in a `stopped` state post-restore so the operator can verify before starting.
@@ -324,6 +560,9 @@ All pattern bootstrap and operational tooling runs inside the **Red Hat Validate
 | (Optional) VM-based application | Deferred — OpenShift Virtualization / KubeVirt | VM restores in stopped state; operator verifies before starting | Deferred |
 | Spoke onboarding race condition (Req 10) | `charts/all/trilio-secrets/` new app (sync-wave -1) with ExternalSecrets only; `trilio-operand` at wave 0 with `SkipDryRunOnMissingResource=true`; ExternalSecret templates removed from `trilio-operand` chart | Fresh spoke onboard completes fully automatically with no manual workaround — validated 2026-03-13 on ocp-dc12 | Done |
 | Trilio 5.3.x native license-via-Secret (Req 9) | Add 5.3.x License Secret ref to TVM spec; bump OLM channel to 5.3.x; retain Job for 5.2.x backwards compatibility | Upgrade validates automatically; License CR converts; no manual steps | In Progress (manifests in hand) |
+| Pattern documentation for validatedpatterns.io (Req 11) | `Document.md` in repo root — usage manual for pattern adopters covering architecture, deployment, operations, and troubleshooting | Document pulled by RH VP team; published on validatedpatterns.io | Not Started |
+| Imperative Framework Automation — E2E DR lifecycle (Req 12) | 7 imperative playbooks wired into `values-hub.yaml` `imperative.jobs`; 4-phase pipeline: validate → backup → enable CR → wait CS → restore → validate restore → alert | Full E2E DR cycle completes automatically after clusters up; PASS/FAIL alert emitted | Not Started |
+| VP Uninstall teardown validation (Req 13) | Delete Pattern CR; document finalizer cleanup; confirm ODF preserved; confirm spoke disassociation | Hub clean (no VP namespaces/Trilio/ArgoCD apps); spoke standalone and functional; ODF intact | Not Started |
 
 > Update this table as new requirements are implemented and validated.
 
@@ -341,6 +580,13 @@ All pattern bootstrap and operational tooling runs inside the **Red Hat Validate
 | `ansible/playbooks/dr-restore.yaml` | Create Restore CR (backup/location/consistentset), auto-discover Route hostname, optional hookConfig, poll to completion, validate pods | Validated 2026-03-06 (backup method) |
 | `ansible/playbooks/enable-continuous-restore.yaml` | Discover spoke instanceID from Target CR status; create ContinuousRestore Policy + CR-enabled BackupPlan (Ansible-owned, not ArgoCD-managed) | Done 2026-03-14 |
 | `ansible/playbooks/dr-test.yaml` | Annual DR Test — backup + pre-staged restore + transform end-to-end | Not Started |
+| `ansible/playbooks/imperative-validate.yaml` | Imperative: pre-flight health check — CSV, TVM, License, BackupTarget (Req 12 Phase 1) | Not Started |
+| `ansible/playbooks/imperative-backup.yaml` | Imperative: ensure Available backup exists; create if absent (Req 12 Phase 1) | Not Started |
+| `ansible/playbooks/imperative-enable-cr.yaml` | Imperative: enable Continuous Restore on DR cluster; idempotent (Req 12 Phase 2) | Not Started |
+| `ansible/playbooks/imperative-wait-cs.yaml` | Imperative: poll for Available ConsistentSet on DR cluster (Req 12 Phase 2) | Not Started |
+| `ansible/playbooks/imperative-restore.yaml` | Imperative: restore from ConsistentSet; apply Route transform (Req 12 Phase 3) | Not Started |
+| `ansible/playbooks/imperative-validate-restore.yaml` | Imperative: verify WordPress accessible at DR URL post-restore (Req 12 Phase 3) | Not Started |
+| `ansible/playbooks/imperative-alert.yaml` | Imperative: emit structured pass/fail result with cluster + restore details (Req 12 Phase 4) | Not Started |
 
 ---
 
