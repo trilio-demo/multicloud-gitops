@@ -34,6 +34,8 @@ The following must be satisfied on **every cluster** (hub and spokes) before dep
 
 > **ODF Note:** ODF must be installed and configured **before** running `pattern.sh make install`. The VP does not install ODF — it has hardware requirements (minimum 3 nodes with attached block devices) that vary by environment. On RHPDS clusters, ODF is typically pre-installed. On OpenMetal or bare-metal OCP, install ODF separately via the ODF operator and create a `StorageSystem`/`StorageCluster` before deploying this pattern.
 
+> **Optional — OpenShift Virtualization (OCP Virt):** Required only if VM-based workload protection is needed (Req 8). OCP Virt is **not required** for the core container DR workflow. When present, Trilio can protect VirtualMachine resources alongside PVC-backed applications using the same BackupPlan model. OCP Virt must be installed and a default VM StorageClass configured before any VM-targeted BackupPlan is created. If OCP Virt is not installed, Req 8 is not applicable and no other functionality is affected.
+
 ### Restore Pre-Requisites
 
 The following must be known or provisioned before running the `dr-restore.yaml` playbook. These are in addition to the cluster-level pre-requisites above.
