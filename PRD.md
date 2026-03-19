@@ -429,8 +429,34 @@ The `sync-rhdp-branch.yml` workflow has an org guard: `if: github.repository_own
 
 ---
 
-### Req 8 — VM Application (Deferred)
-OpenShift Virtualization (KubeVirt/CNV) adds significant complexity (operator, DataVolumes, potentially build pipelines). A simple RHEL or Fedora appliance VM avoids Windows licensing friction. Deferred to a future iteration; flagged as a stretch goal for customer POC demos. If implemented, the VM should be brought up in a `stopped` state post-restore so the operator can verify before starting.
+### Req 8 — VM Application (OCP Virt)
+
+Demonstrate Trilio DR protecting a VM-based workload alongside the WordPress container app, using OpenShift Virtualization (KubeVirt/CNV).
+
+**Delivery:** A new Helm chart `charts/all/fedora-vm/` deployed as an ArgoCD Application on the hub (and optionally group-one). The chart follows the same model as `charts/all/wordpress/`.
+
+**Chart contents:**
+| Resource | Kind | Notes |
+|----------|------|-------|
+| `namespace.yaml` | Namespace | e.g. `fedora-vm` |
+| `virtualmachine.yaml` | `VirtualMachine` (`kubevirt.io/v1`) | Fedora or RHEL cloud image via container disk; avoids Windows licensing |
+| `datavolume.yaml` | `DataVolume` (`cdi.kubevirt.io/v1beta1`) | Imports cloud image from a known URL or container registry into ODF-backed PVC |
+| `service.yaml` | Service | SSH/HTTP access for validation |
+
+**Pre-requisites:**
+- OCP Virt operator installed (see optional pre-req in Pre-Requisites section)
+- CDI (Containerized Data Importer) available — installed automatically with OCP Virt
+- ODF StorageClass available for DataVolume PVC
+
+**BackupPlan coverage:**
+- The existing `wordpress-backupplan` is extended (or a new `fedora-vm-backupplan` is created) to include the `fedora-vm` namespace
+- Trilio protects the DataVolume-backed PVC using the CSI snapshot API — same mechanism as container workloads
+
+**Restore behaviour:**
+- VM should be restored in a `stopped` state (`running: false` in spec) so the operator can verify disk integrity before starting
+- A post-restore hook or Ansible task powers the VM on after validation
+
+**Status:** Deferred — flagged as a stretch goal for customer POC demos. OCP Virt operator complexity and DataVolume import time are the main friction points. A simple Fedora cloud image avoids Windows licensing. Implement after Req 12 (imperative automation) is stable.
 
 ### Req 9 — Upgrade to Trilio 5.3.x: Native License-via-Secret
 
