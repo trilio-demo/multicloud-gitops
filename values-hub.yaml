@@ -152,10 +152,10 @@ clusterGroup:
         playbook: ansible/playbooks/imperative-backup.yaml
         timeout: 1200
 
-      # Stage 3 (add after Stage 2 validated):
-      # - name: trilio-e2e-status
-      #   playbook: ansible/playbooks/imperative-e2e-status.yaml
-      #   timeout: 120
+      # Stage 3: read-only; writes trilio-dr-status ConfigMap to imperative ns
+      - name: trilio-e2e-status
+        playbook: ansible/playbooks/imperative-e2e-status.yaml
+        timeout: 120
 
       # Stage 4 (add last — creates a Restore CR):
       # - name: trilio-restore-standard
