@@ -129,6 +129,38 @@ clusterGroup:
         # per playbook timeout in seconds
         timeout: 234
         # verbosity: "-v"
+
+      # -----------------------------------------------------------------------
+      # Req 12 — E2E DR lifecycle automation
+      # Phase 1: Create a backup if none exists (runs every 10 min until done)
+      # Phase 2: Restore latest backup to wordpress-restore (runs after Phase 1)
+      # Phase 3: Enable Continuous Restore for group-one DR clusters (auto-discovers
+      #          new clusters from ACM; idempotent; runs until CR BackupPlan Available)
+      # Phase 4: Aggregate E2E status; write ConfigMap; fail job if incomplete
+      #          (VP framework surfaces failures in Job logs for alerting)
+      #
+      # Check E2E status at any time:
+      #   oc get configmap trilio-dr-status -n imperative -o yaml
+      # -----------------------------------------------------------------------
+      # Stage 1: validate framework wiring — skips immediately (CR BackupPlan already Available)
+      - name: trilio-enable-cr
+        playbook: ansible/playbooks/imperative-enable-cr.yaml
+        timeout: 900
+
+      # Stage 2 (add after Stage 1 validated):
+      # - name: trilio-backup
+      #   playbook: ansible/playbooks/imperative-backup.yaml
+      #   timeout: 1200
+
+      # Stage 3 (add after Stage 2 validated):
+      # - name: trilio-e2e-status
+      #   playbook: ansible/playbooks/imperative-e2e-status.yaml
+      #   timeout: 120
+
+      # Stage 4 (add last — creates a Restore CR):
+      # - name: trilio-restore-standard
+      #   playbook: ansible/playbooks/imperative-restore-standard.yaml
+      #   timeout: 1800
   managedClusterGroups:
     exampleRegion:
       name: group-one
