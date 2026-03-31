@@ -104,26 +104,32 @@
              else 'CR BackupPlan ' + cr_backupplan_name + ' not found' }}
 
     # -------------------------------------------------------------------------
-    # 4. Check Phase 3b — ConsistentSet available on any DR cluster
+    # 4. Check Phase 3b — CR-enabled backup exists (proves EventTarget pipeline active)
+    #    ConsistentSets live on the DR spoke and are not visible from the hub.
+    #    A CR-enabled backup in the app namespace is the hub-visible proof that
+    #    the Continuous Restore pipeline is running end-to-end.
     # -------------------------------------------------------------------------
-    - name: Check for Available ConsistentSet
+    - name: Check for Available CR-enabled backup
       kubernetes.core.k8s_info:
         api_version: triliovault.trilio.io/v1
-        kind: ConsistentSet
-      register: _csets
+        kind: Backup
+        namespace: "{{ app_namespace }}"
+        label_selectors:
+          - "triliovault.trilio.io/backupplan={{ cr_backupplan_name }}"
+      register: _cr_backups
 
     - name: Set phase3b status
       ansible.builtin.set_fact:
         _phase3b_ok: >-
-          {{ _csets.resources
+          {{ _cr_backups.resources
              | selectattr('status.status', 'equalto', 'Available')
              | list | length > 0 }}
         _phase3b_detail: >-
-          {{ (_csets.resources
+          {{ (_cr_backups.resources
               | selectattr('status.status', 'equalto', 'Available')
               | map(attribute='metadata.name') | list | join(', '))
-             if (_csets.resources | selectattr('status.status', 'equalto', 'Available') | list | length > 0)
-             else 'No Available ConsistentSet found (EventTarget may still be staging)' }}
+             if (_cr_backups.resources | selectattr('status.status', 'equalto', 'Available') | list | length > 0)
+             else 'No Available backup from CR BackupPlan ' + cr_backupplan_name + ' found' }}
 
     # -------------------------------------------------------------------------
     # 5. Compute overall result
@@ -151,7 +157,7 @@
             phase1_backup: "{{ 'PASS' if _phase1_ok else 'FAIL' }} — {{ _phase1_detail }}"
             phase2_restore_standard: "{{ 'PASS' if _phase2_ok else 'FAIL' }} — {{ _phase2_detail }}"
             phase3a_cr_backupplan: "{{ 'PASS' if _phase3a_ok else 'FAIL' }} — {{ _phase3a_detail }}"
-            phase3b_consistent_set: "{{ 'PASS' if _phase3b_ok else 'FAIL' }} — {{ _phase3b_detail }}"
+            phase3b_cr_backup: "{{ 'PASS' if _phase3b_ok else 'FAIL' }} — {{ _phase3b_detail }}"
 
     - name: Show E2E status summary
       ansible.builtin.debug:
@@ -160,7 +166,7 @@
           - "  Phase 1 — Backup:            {{ 'PASS' if _phase1_ok else 'FAIL' }} — {{ _phase1_detail }}"
           - "  Phase 2 — Standard Restore:  {{ 'PASS' if _phase2_ok else 'FAIL' }} — {{ _phase2_detail }}"
           - "  Phase 3a — CR BackupPlan:    {{ 'PASS' if _phase3a_ok else 'FAIL' }} — {{ _phase3a_detail }}"
-          - "  Phase 3b — ConsistentSet:    {{ 'PASS' if _phase3b_ok else 'FAIL' }} — {{ _phase3b_detail }}"
+          - "  Phase 3b — CR Backup:        {{ 'PASS' if _phase3b_ok else 'FAIL' }} — {{ _phase3b_detail }}"
           - "  ConfigMap: oc get configmap trilio-dr-status -n {{ imperative_namespace }} -o yaml"
 
     # -------------------------------------------------------------------------

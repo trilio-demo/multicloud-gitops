@@ -157,10 +157,10 @@ clusterGroup:
         playbook: ansible/playbooks/imperative-e2e-status.yaml
         timeout: 120
 
-      # Stage 4 (add last — creates a Restore CR):
-      # - name: trilio-restore-standard
-      #   playbook: ansible/playbooks/imperative-restore-standard.yaml
-      #   timeout: 1800
+      # Stage 4: creates a Restore CR in wordpress-restore; skips if Completed restore exists
+      - name: trilio-restore-standard
+        playbook: ansible/playbooks/imperative-restore-standard.yaml
+        timeout: 1800
   managedClusterGroups:
     exampleRegion:
       name: group-one
