@@ -147,10 +147,10 @@ clusterGroup:
         playbook: ansible/playbooks/imperative-enable-cr.yaml
         timeout: 900
 
-      # Stage 2 (add after Stage 1 validated):
-      # - name: trilio-backup
-      #   playbook: ansible/playbooks/imperative-backup.yaml
-      #   timeout: 1200
+      # Stage 2: skip if Available backup already exists
+      - name: trilio-backup
+        playbook: ansible/playbooks/imperative-backup.yaml
+        timeout: 1200
 
       # Stage 3 (add after Stage 2 validated):
       # - name: trilio-e2e-status
