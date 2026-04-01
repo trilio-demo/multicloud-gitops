@@ -147,20 +147,20 @@ clusterGroup:
         playbook: ansible/playbooks/imperative-enable-cr.yaml
         timeout: 900
 
-      # Stage 2: skip if Available backup already exists
+      # Phase 2: skip if Available backup already exists
       - name: trilio-backup
         playbook: ansible/playbooks/imperative-backup.yaml
         timeout: 1200
 
-      # Stage 3: read-only; writes trilio-dr-status ConfigMap to imperative ns
-      - name: trilio-e2e-status
-        playbook: ansible/playbooks/imperative-e2e-status.yaml
-        timeout: 120
-
-      # Stage 4: creates a Restore CR in wordpress-restore; skips if Completed restore exists
+      # Phase 3: creates a Restore CR in wordpress-restore; skips if Completed restore exists
       - name: trilio-restore-standard
         playbook: ansible/playbooks/imperative-restore-standard.yaml
         timeout: 1800
+
+      # Phase 4: aggregate status — runs last; fails job until all phases pass
+      - name: trilio-e2e-status
+        playbook: ansible/playbooks/imperative-e2e-status.yaml
+        timeout: 120
   managedClusterGroups:
     exampleRegion:
       name: group-one
