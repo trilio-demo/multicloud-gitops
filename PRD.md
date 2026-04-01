@@ -103,7 +103,7 @@ Each item maps to a deliverable in the Implementation Matrix below.
 | 9 | Upgrade to Trilio 5.3.x: adopt native license-via-Secret model; remove License Job workaround | P1 — In Progress (manifests in hand) |
 | 10 | Spoke onboarding: resolve OLM/ArgoCD race condition so trilio-operand self-heals without manual sync | P1 — Done |
 | 11 | Pattern documentation (`Document.md`) for publication on validatedpatterns.io — comprehensive usage manual for pattern adopters | P1 — Not Started |
-| 12 | Imperative Framework Automation: full E2E DR lifecycle driven by VP imperative jobs — backup on hub ready, enable Continuous Restore when DR cluster joins, restore + validate when ConsistentSet present, alert on success/failure | P0 — Not Started |
+| 12 | Imperative Framework Automation: full E2E DR lifecycle driven by VP imperative jobs — backup on hub ready, enable Continuous Restore when DR cluster joins, restore + validate when ConsistentSet present, alert on success/failure | P0 — Done |
 | 13 | VP Uninstall: validate Pattern CR deletion teardown; document finalizer cleanup; confirm ODF is preserved; verify spoke disassociation from ACM | P2 — Not Started |
 | 14 | Remove multicloud-gitops upstream overhead (hello-world, config-demo, RHDP-specific workflows where appropriate); retain or comment items with future value; document every decision | P1 — Not Started |
 | 15 | Publish clean pattern to new public GitHub repo `trilio-continuous-restore`: update all metadata, RHDP workflow references, pattern name throughout; disconnect from multicloud-gitops lineage while preserving VP framework compatibility | P1 — Not Started |
