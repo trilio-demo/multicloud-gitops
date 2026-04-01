@@ -274,13 +274,16 @@ Two ArgoCD instances exist on the spoke after onboarding:
 openshift-gitops (namespace)
   └── Application: dallas-multicloudops-group-one   ← app-of-apps, created by ACM
         │  watches Git repo, renders values-group-one.yaml, generates child apps
+        │  ⚠ NO automated sync — ACM owns this Application and does not set
+        │    syncPolicy: automated. Goes OutOfSync on Git changes but does NOT
+        │    self-heal. Requires a manual sync trigger to re-render child apps.
         ▼
 dallas-multicloudops-group-one (namespace — separate ArgoCD instance)
-  ├── config-demo
-  ├── golang-external-secrets
-  ├── hello-world
-  ├── trilio-operand
-  └── wordpress-restore
+  ├── config-demo              ← automated sync (from values-group-one.yaml)
+  ├── golang-external-secrets  ← automated sync
+  ├── hello-world              ← automated sync
+  ├── trilio-operand           ← automated sync
+  └── wordpress-restore        ← automated sync
 ```
 
 ACM creates the app-of-apps in `openshift-gitops`. Once deployed, the app-of-apps is
@@ -416,6 +419,36 @@ watch oc get csv -n trilio-system
 5. After workaround: TVM applied → child CRDs registered → ArgoCD sync succeeds
 6. `oc get triliovaultmanager -n trilio-system` → `Deployed`
 7. `oc get target trilio-s3-target -n trilio-system` → `Available`
+
+### Why the App-of-Apps Goes OutOfSync After a Git Push
+
+When you push a change to `values-group-one.yaml` (e.g. adding a new imperative job), the child
+apps in `dallas-multicloudops-group-one` do **not** automatically pick up the change. Here's why:
+
+The app-of-apps (`dallas-multicloudops-group-one` in `openshift-gitops`) is created and managed
+by ACM's GitOpsCluster mechanism. ACM places it on the spoke but does **not** configure
+`syncPolicy: automated` on it. So it detects the Git drift and shows `OutOfSync`, but waits for
+a manual trigger rather than self-healing.
+
+The child apps *do* have `syncPolicy: automated`, but they only get updated resource templates
+when the app-of-apps re-renders `values-group-one.yaml` and regenerates them. Until the
+app-of-apps syncs, the child apps are reconciling against the **old** templates.
+
+**The fix:**
+```bash
+oc patch application dallas-multicloudops-group-one -n openshift-gitops \
+  --type merge -p '{"operation":{"sync":{}}}'
+```
+
+After this, the app-of-apps re-renders `values-group-one.yaml`, the child apps receive updated
+templates, and their automated sync applies the changes within seconds.
+
+**When this matters:** Any time you add/change an imperative job, add a new application, or
+modify sync settings in `values-group-one.yaml`. Changes to chart content inside
+`charts/all/trilio-operand/` are picked up by the child `trilio-operand` app directly (automated
+sync) and do not require the app-of-apps trigger.
+
+---
 
 ### Talking Points
 - **One label, full stack.** The only action needed on the spoke after ODF is `oc label managedcluster`. ACM and ArgoCD do the rest — operator, operand, secrets, restore prerequisites.
