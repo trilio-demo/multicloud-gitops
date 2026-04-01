@@ -79,6 +79,19 @@ rules:
       - create
       - patch
       - update
+  # Secret write (Trilio admission webhook clones the Target's credential Secret
+  # into the restore namespace when a Restore CR is created — imperative-sa must
+  # be able to create/update that cloned Secret)
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - get
+      - list
+      - create
+      - patch
+      - update
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
