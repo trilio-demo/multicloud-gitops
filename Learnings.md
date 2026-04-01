@@ -869,6 +869,35 @@ resources (ManagedCluster, Ingress config, ConsistentSet).
 **To add permissions for a new playbook**, edit the `imperative-trilio-operator` ClusterRole
 in that file and commit. ArgoCD will apply the updated RBAC on the next sync.
 
+#### The Trilio Webhook Secret Clone
+
+When any ServiceAccount submits a Restore CR, the Trilio admission webhook
+(`tvk-mutation.trilio.io`) does more than validate the request — it **clones the Target's
+credential Secret into the restore namespace** so that the restore job can reach S3 storage
+from that namespace.
+
+This means the SA creating the Restore CR must have `secrets: create/patch/update` across
+**all restore target namespaces**, not just `trilio-system` where the original Secret lives.
+
+**Why it's hard to diagnose:** the webhook returns HTTP `400 Bad Request` with the error buried
+inside the message body:
+
+```
+admission webhook "tvk-mutation.trilio.io" denied the request:
+  error creating clone: error creating Target object:
+    admission webhook "tvk-mutation.trilio.io" denied the request:
+      error creating clone: error creating Secret object:
+        secrets is forbidden: User "system:serviceaccount:imperative:imperative-sa"
+        cannot create resource "secrets" in API group "" in the namespace "wordpress-restore"
+```
+
+A `400` from a webhook is not what you expect for an RBAC failure — you'd normally look for a
+`403 Forbidden`. The nested structure (webhook calling webhook) also obscures the actual cause.
+
+**The fix:** add `secrets` to the ClusterRole covering all namespaces. Since the Target's
+credential Secret could be cloned to any restore namespace, a ClusterRole (rather than
+namespace-scoped Roles) is the right scope.
+
 ---
 
 ### Monitoring the Imperative Framework
