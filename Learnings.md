@@ -769,3 +769,169 @@ The spoke is **self-sufficient** once bootstrapped. Hub connectivity is only req
 
 Hub downtime does not affect Trilio backup/restore operations already running on the spoke.
 *Update this file as new insights are discovered or existing patterns are refined.*
+
+---
+
+## Imperative Framework: How Jobs Become CronJobs
+
+### Overview
+
+The Validated Patterns (VP) *imperative framework* provides a structured way to run scheduled
+Ansible playbooks on a cluster managed by ArgoCD. It bridges the gap between declarative GitOps
+(ArgoCD applies desired state) and imperative workflows (Ansible drives Kubernetes API sequences
+that have ordering and timing requirements).
+
+Everything is triggered by entries in `imperative.jobs` inside `values-hub.yaml`. That YAML
+block ends up as a **Kubernetes CronJob** running on a schedule. This section explains how the
+pieces connect end to end.
+
+---
+
+### Data-Flow Diagram
+
+The diagram below traces the path from a Git commit to a running Ansible playbook.
+
+```mermaid
+flowchart TD
+    A[Developer commits\nvalues-hub.yaml\nimperative.jobs] --> B[ArgoCD syncs\nhub cluster]
+    B --> C[VP framework\ngenerates ArgoCD\nApplication:\nimperative-setup]
+    C --> D[Kubernetes CronJob\nimperative-cronjob-HASH\nschedule: every 10 min]
+
+    D --> E[CronJob fires\ncreates a Pod]
+
+    subgraph pod [Pod: imperative-cronjob-HASH-XXXXX]
+        direction TB
+        IC0[init-container 0\nfetch-ca\npull cluster CA cert]
+        IC1[init-container 1\ngit-init\nclone Git repo into\nshared emptyDir volume]
+        IC2[init-container 2\nhello-world\nplaybook: rhvp.cluster_utils.hello_world]
+        IC3[init-container 3\ntrilio-enable-cr\nplaybook: imperative-enable-cr.yaml]
+        IC4[init-container 4\ntrilio-backup\nplaybook: imperative-backup.yaml]
+        IC5[init-container 5\ntrilio-restore-standard\nplaybook: imperative-restore-standard.yaml]
+        IC6[init-container 6\ntrilio-e2e-status\nplaybook: imperative-e2e-status.yaml]
+        IC7[container: done\nlong-running pause\nkeeps pod alive for log inspection]
+
+        IC0 --> IC1 --> IC2 --> IC3 --> IC4 --> IC5 --> IC6 --> IC7
+    end
+
+    E --> pod
+
+    IC3 -- "skip: CR BackupPlan\nalready Available" --> IC4
+    IC4 -- "skip: Available\nbackup already exists" --> IC5
+    IC5 -- "skip: Completed\nrestore already exists" --> IC6
+    IC6 -- "fail: phases not\nyet all PASS" --> FAIL[Pod shows\nInit:Error\nVP logs alert]
+    IC6 -- "all phases PASS" --> IC7
+
+    IC6 --> CM[ConfigMap\ntrilio-dr-status\nin imperative ns]
+```
+
+**Key rules:**
+- Init containers run **sequentially**. If one exits non-zero, the pod enters `Init:Error` and all subsequent init containers never run.
+- The `trilio-e2e-status` job is **intentionally last** and **intentionally fails** until all DR phases are complete. Once all phases pass, the job exits 0 and the pod completes successfully. The framework stops retrying until something changes.
+- Every playbook is **idempotent**. If work is already done, the playbook calls `meta: end_play` and exits 0 — it does not re-run the operation. This means the jobs can fire every 10 minutes without side effects.
+
+---
+
+### Phase-by-Phase Breakdown
+
+| Init Container | Playbook | Skip Condition | What It Does |
+|---|---|---|---|
+| `trilio-enable-cr` | `imperative-enable-cr.yaml` | CR BackupPlan already `Available` | Discovers group-one DR clusters from ACM; matches to Target `availableContinuousRestoreInstances`; creates ContinuousRestore Policy + CR BackupPlan |
+| `trilio-backup` | `imperative-backup.yaml` | `Available` Backup already exists | Creates a Backup CR from `wordpress-backup-plan`; waits for it to reach `Available` |
+| `trilio-restore-standard` | `imperative-restore-standard.yaml` | `Completed` Restore already exists in `wordpress-restore` | Restores latest Available backup to `wordpress-restore` with Route hostname transform |
+| `trilio-e2e-status` | `imperative-e2e-status.yaml` | None (always runs) | Checks all four phases; writes `trilio-dr-status` ConfigMap; **fails job** until all phases pass |
+
+---
+
+### RBAC: Why imperative-sa Needs a ClusterRole
+
+The VP framework creates a `ServiceAccount` named `imperative-sa` in the `imperative` namespace.
+All Ansible playbooks run as this service account inside the CronJob pod.
+
+By default, `imperative-sa` has no permissions beyond reading its own namespace. Any Kubernetes
+API call that touches Trilio CRs (BackupPlan, Backup, Restore, Policy, Target, etc.) will return
+`403 Forbidden` unless explicit RBAC is granted.
+
+**What was granted** (in `charts/all/trilio-operand/templates/imperative-sa-rbac.yaml`):
+
+| Resource | Verbs | Reason |
+|---|---|---|
+| Trilio CRs (BackupPlan, Backup, Restore, Hook, Policy, Target, TVM) | get/list/watch/create/patch/update | Create and monitor DR objects |
+| ConsistentSet (cluster-scoped) | get/list/watch | Read-only; CR pipeline status |
+| OLM ClusterServiceVersions | get/list | Trilio health check (CSV phase) |
+| ACM ManagedClusters | get/list | Discover group-one DR clusters |
+| OpenShift Ingress config | get/list | Auto-discover route hostname for restore |
+| ConfigMaps | get/list/create/patch/update | Write `trilio-dr-status` status summary |
+
+A **ClusterRole** is used (rather than a namespaced Role) because the permissions span multiple
+namespaces (`wordpress`, `wordpress-restore`, `trilio-system`) and include cluster-scoped
+resources (ManagedCluster, Ingress config, ConsistentSet).
+
+**To add permissions for a new playbook**, edit the `imperative-trilio-operator` ClusterRole
+in that file and commit. ArgoCD will apply the updated RBAC on the next sync.
+
+---
+
+### Monitoring the Imperative Framework
+
+#### Find the latest CronJob pod
+
+```bash
+# List all imperative pods, newest first
+oc get pods -n imperative --sort-by=.metadata.creationTimestamp | grep imperative-cronjob
+
+# Or get just the latest one
+oc get pods -n imperative -l job-name --sort-by=.metadata.creationTimestamp \
+  --no-headers | tail -1
+```
+
+#### Check which init container failed
+
+```bash
+POD=<pod-name-from-above>
+
+# See all init container statuses at a glance
+oc get pod $POD -n imperative \
+  -o jsonpath='{range .status.initContainerStatuses[*]}{.name}{"\t"}{.state}{"\n"}{end}'
+
+# Get logs from a specific init container
+oc logs $POD -n imperative -c trilio-e2e-status
+oc logs $POD -n imperative -c trilio-restore-standard
+```
+
+#### Read the E2E status ConfigMap
+
+```bash
+oc get configmap trilio-dr-status -n imperative -o yaml
+```
+
+Example output when all phases pass:
+```yaml
+data:
+  overall: PASS
+  phase1_backup: "PASS — wordpress-backup-20260331-10h00"
+  phase2_restore_standard: "PASS — imperative-restore-20260331-10h05"
+  phase3a_cr_backupplan: "PASS — Available"
+  phase3b_cr_backup: "PASS — wordpress-backup-cr-20260331-10h10"
+```
+
+#### Verify RBAC is in place
+
+```bash
+oc get clusterrole imperative-trilio-operator
+oc get clusterrolebinding imperative-trilio-operator
+
+# Test a specific permission (replace verb/resource as needed)
+oc auth can-i create restores.triliovault.trilio.io \
+  --as=system:serviceaccount:imperative:imperative-sa \
+  --all-namespaces
+```
+
+---
+
+### Talking Points
+
+- **No operator needed.** The imperative framework uses standard Kubernetes primitives — CronJob, init containers, ServiceAccount — not a custom operator. This makes it auditable, debuggable with standard `oc` commands, and easy to extend.
+- **The job order is significant.** `trilio-e2e-status` must be last. If it is placed before any other phase, its intentional `fail` will prevent later phases from running.
+- **Idempotency is built in, not bolted on.** Each playbook checks for completion before doing any work. Re-running the framework 100 times does not create 100 backups — it creates one, then skips on every subsequent run.
+- **The ConfigMap is the status API.** External monitoring tools, dashboards, or CI pipelines can read `trilio-dr-status` in the `imperative` namespace to check DR health without parsing pod logs.
+- **RBAC lives in the trilio-operand chart.** This means the ClusterRole is applied to every cluster that has the trilio-operand ArgoCD Application — currently the hub only. If a spoke ever runs imperative jobs, the chart already covers it.
