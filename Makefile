@@ -2,4 +2,54 @@
 # This Makefile includes the common pattern targets from Makefile-common
 # You can add custom targets above or below the include line
 
+##@ DR Spoke Management
+# Usage: make onboard-spoke CLUSTER=<managedcluster-name>
+#   Example: make onboard-spoke CLUSTER=ocp-dc12
+#
+# Pre-requisites (on the spoke, before running this):
+#   - ODF installed with a CSI StorageClass set as the cluster default
+#   - Cluster already imported into ACM (visible in `oc get managedcluster`)
+#   - Hub secrets loaded (`make install` or `make load-secrets` already run)
+#
+# After running this, the full onboarding sequence is automatic (~15-25 min):
+#   ACM PlacementRule matches → ArgoCD bootstrap → Trilio operator (OLM)
+#   → ESO syncs secrets from Vault → TVM reconciles → BackupTarget Available
+#   → wordpress-restore namespace provisioned → Trilio registers with hub Target
+
+CLUSTER ?= $(error CLUSTER is required — run: make onboard-spoke CLUSTER=<name>)
+
+.PHONY: onboard-spoke
+onboard-spoke: ## Onboard a DR spoke cluster: make onboard-spoke CLUSTER=<managedcluster-name>
+	@echo "Onboarding spoke cluster: $(CLUSTER)"
+	@oc get managedcluster $(CLUSTER) > /dev/null 2>&1 || \
+	  (echo "ERROR: ManagedCluster '$(CLUSTER)' not found. Import it into ACM first." && exit 1)
+	@oc label managedcluster $(CLUSTER) clusterGroup=group-one --overwrite
+	@echo "Label applied. ACM will now provision the full Trilio DR stack (~15-25 min)."
+	@echo "Monitor with: make spoke-status CLUSTER=$(CLUSTER)"
+
+.PHONY: spoke-status
+spoke-status: ## Check DR spoke onboarding and Continuous Restore status: make spoke-status CLUSTER=<name>
+	@echo ""
+	@echo "=== ACM ManagedCluster: $(CLUSTER) ==="
+	@oc get managedcluster $(CLUSTER) --no-headers 2>/dev/null || echo "  Not found"
+	@echo ""
+	@echo "=== Hub Target: Registered CR Instances ==="
+	@oc get target.triliovault.trilio.io trilio-s3-target -n trilio-system \
+	  -o jsonpath='{.status.availableContinuousRestoreInstances}' 2>/dev/null \
+	  | python3 -m json.tool 2>/dev/null || echo "  Target not available or no instances registered"
+	@echo ""
+	@echo "=== Hub E2E DR Status (trilio-dr-status ConfigMap) ==="
+	@oc get configmap trilio-dr-status -n imperative \
+	  -o jsonpath='{range .data}{@k}{"\n"}' 2>/dev/null || \
+	  oc get configmap trilio-dr-status -n imperative -o yaml 2>/dev/null || \
+	  echo "  ConfigMap not yet created (hub imperative job has not run)"
+	@echo ""
+	@echo "Spoke-side CR status (run on spoke context):"
+	@echo "  oc get configmap trilio-cr-status -n imperative -o yaml"
+
+.PHONY: dr-status
+dr-status: ## Show hub-side E2E DR status ConfigMap
+	@oc get configmap trilio-dr-status -n imperative -o yaml 2>/dev/null || \
+	  echo "ConfigMap trilio-dr-status not found in imperative namespace"
+
 include Makefile-common

@@ -87,6 +87,19 @@ clusterGroup:
         # per playbook timeout in seconds
         timeout: 234
         # verbosity: "-v"
+
+      # -----------------------------------------------------------------------
+      # Req 12 — Spoke-side Continuous Restore validation
+      # Checks that the CR pipeline has delivered ConsistentSets to this spoke.
+      # PASS when at least one Available ConsistentSet exists.
+      # Fails and retries every cycle until the CR pipeline has fired at least once.
+      #
+      # Check status at any time:
+      #   oc get configmap trilio-cr-status -n imperative -o yaml
+      # -----------------------------------------------------------------------
+      - name: trilio-cr-status
+        playbook: ansible/playbooks/imperative-cr-status.yaml
+        timeout: 120
   # Explicitly mention the cluster-state based overrides we plan to use for this pattern.
   # We can use self-referential variables because the chart calls the tpl function with these variables defined
   sharedValueFiles:
