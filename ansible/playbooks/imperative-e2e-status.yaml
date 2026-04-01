@@ -118,21 +118,23 @@
         api_version: triliovault.trilio.io/v1
         kind: Backup
         namespace: "{{ app_namespace }}"
-        label_selectors:
-          - "triliovault.trilio.io/backupplan={{ cr_backupplan_name }}"
-      register: _cr_backups
+      register: _all_backups
 
     - name: Set phase3b status
       ansible.builtin.set_fact:
-        _phase3b_ok: >-
-          {{ _cr_backups.resources
+        _phase3b_cr_backups: >-
+          {{ _all_backups.resources
+             | selectattr('spec.backupPlan.name', 'defined')
+             | selectattr('spec.backupPlan.name', 'equalto', cr_backupplan_name)
              | selectattr('status.status', 'equalto', 'Available')
-             | list | length > 0 }}
+             | list }}
+
+    - name: Set phase3b ok/detail
+      ansible.builtin.set_fact:
+        _phase3b_ok: "{{ _phase3b_cr_backups | length > 0 }}"
         _phase3b_detail: >-
-          {{ (_cr_backups.resources
-              | selectattr('status.status', 'equalto', 'Available')
-              | map(attribute='metadata.name') | list | join(', '))
-             if (_cr_backups.resources | selectattr('status.status', 'equalto', 'Available') | list | length > 0)
+          {{ (_phase3b_cr_backups | map(attribute='metadata.name') | list | join(', '))
+             if _phase3b_cr_backups | length > 0
              else 'No Available backup from CR BackupPlan ' + cr_backupplan_name + ' found' }}
 
     # -------------------------------------------------------------------------
