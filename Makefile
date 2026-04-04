@@ -47,6 +47,14 @@ spoke-status: ## Check DR spoke onboarding and Continuous Restore status: make s
 	@echo "Spoke-side CR status (run on spoke context):"
 	@echo "  oc get configmap trilio-cr-status -n imperative -o yaml"
 
+.PHONY: offboard-spoke
+offboard-spoke: ## Remove pattern from a DR spoke (safe ordered teardown): make offboard-spoke CLUSTER=<name>
+	@echo "Offboarding spoke cluster: $(CLUSTER)"
+	@oc get managedcluster $(CLUSTER) > /dev/null 2>&1 || \
+	  (echo "ERROR: ManagedCluster '$(CLUSTER)' not found." && exit 1)
+	@ansible-playbook ansible/playbooks/offboard-spoke.yaml \
+	  -e spoke_cluster_name=$(CLUSTER)
+
 .PHONY: dr-status
 dr-status: ## Show hub-side E2E DR status ConfigMap
 	@oc get configmap trilio-dr-status -n imperative -o yaml 2>/dev/null || \

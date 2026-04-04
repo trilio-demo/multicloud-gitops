@@ -1,0 +1,263 @@
+---
+# offboard-spoke.yaml
+#
+# Removes the Trilio GitOps Validated Pattern from a group-one spoke cluster.
+#
+# Usage (run from hub context — kubeconfig must reach the spoke):
+#   ansible-playbook ansible/playbooks/offboard-spoke.yaml \
+#     -e spoke_kubeconfig=/path/to/spoke-kubeconfig \
+#     -e spoke_cluster_name=dr-cluster
+#
+# Or via Makefile:
+#   make offboard-spoke CLUSTER=dr-cluster
+#
+# What this playbook does (in safe order):
+#   1. Remove ACM clusterGroup label — stops ACM re-pushing resources
+#   2. Patch Trilio CR finalizers — while operator is still running
+#   3. Delete Trilio OLM Subscription — graceful operator removal
+#   4. Wait for operator pods to terminate
+#   5. Delete CSV — confirms operator fully removed
+#   6. Delete ArgoCD child apps — triggers cascade resource deletion
+#   7. Patch orphaned ArgoCD Application finalizers if needed
+#   8. Delete remaining namespaces
+#   9. Delete Trilio CRDs
+#
+# What is NOT removed:
+#   - ODF / openshift-storage (pre-req infrastructure, not pattern-owned)
+#   - OpenShift GitOps operator (leave unless full reset requested)
+#   - ESO operator (leave unless full reset requested)
+#
+# After this playbook completes, the spoke can be re-onboarded with:
+#   make onboard-spoke CLUSTER=<name>
+
+- name: "Offboard spoke from Trilio GitOps Validated Pattern"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    spoke_cluster_name: "{{ spoke_cluster_name | mandatory }}"
+    spoke_kubeconfig: "{{ spoke_kubeconfig | default(omit) }}"
+    trilio_namespace: trilio-system
+    trilio_csv_prefix: "k8s-triliovault-stable"
+    app_of_apps_name: "dallas-multicloudops-group-one"
+    spoke_argocd_namespace: "dallas-multicloudops-group-one"
+    hub_gitops_namespace: "openshift-gitops"
+    child_apps:
+      - config-demo
+      - golang-external-secrets
+      - hello-world
+      - trilio-operand
+      - trilio-secrets
+      - wordpress-restore
+    pattern_namespaces:
+      - trilio-system
+      - wordpress-restore
+      - imperative
+      - golang-external-secrets
+      - config-demo
+      - hello-world
+
+  environment:
+    KUBECONFIG: "{{ spoke_kubeconfig | default(lookup('env', 'KUBECONFIG')) }}"
+
+  tasks:
+
+    # -------------------------------------------------------------------------
+    # 1. Remove ACM clusterGroup label (hub context)
+    #    Must happen first — without this ACM re-pushes resources immediately
+    # -------------------------------------------------------------------------
+    - name: Remove clusterGroup label from ACM ManagedCluster
+      kubernetes.core.k8s:
+        api_version: cluster.open-cluster-management.io/v1
+        kind: ManagedCluster
+        name: "{{ spoke_cluster_name }}"
+        definition:
+          metadata:
+            labels:
+              clusterGroup: null
+        state: patched
+      vars:
+        ansible_python_interpreter: "{{ ansible_playbook_python }}"
+      environment:
+        KUBECONFIG: "{{ lookup('env', 'KUBECONFIG') }}"
+      delegate_to: localhost
+
+    - name: Wait 15 seconds for ACM to process label removal
+      ansible.builtin.pause:
+        seconds: 15
+
+    # -------------------------------------------------------------------------
+    # 2. Patch Trilio CR finalizers — do this while operator is still running
+    #    so the operator has a chance to process its own cleanup logic first.
+    #    Force-patch removes any that the operator did not self-remove.
+    # -------------------------------------------------------------------------
+    - name: Get all Trilio CRs with finalizers across all namespaces
+      ansible.builtin.shell: |
+        for kind in triliovaultmanagers targets backupplans backups restores hooks policies; do
+          kubectl get ${kind}.triliovault.trilio.io -A --no-headers \
+            -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name 2>/dev/null | \
+          while read ns name; do
+            echo "${kind} ${ns} ${name}"
+          done
+        done
+      register: _trilio_crs
+      changed_when: false
+      ignore_errors: true
+
+    - name: Patch finalizers off all Trilio CRs
+      ansible.builtin.shell: |
+        kubectl patch {{ item.split()[0] }}.triliovault.trilio.io {{ item.split()[2] }} \
+          -n {{ item.split()[1] }} \
+          --type json -p '[{"op":"remove","path":"/metadata/finalizers"}]' 2>/dev/null || true
+      loop: "{{ _trilio_crs.stdout_lines | select('match', '^\\S') | list }}"
+      when: _trilio_crs.stdout_lines | length > 0
+      ignore_errors: true
+
+    # -------------------------------------------------------------------------
+    # 3. Delete Trilio OLM Subscription — triggers graceful operator removal
+    # -------------------------------------------------------------------------
+    - name: Delete Trilio OLM Subscription
+      kubernetes.core.k8s:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: k8s-triliovault
+        namespace: "{{ trilio_namespace }}"
+        state: absent
+      ignore_errors: true
+
+    # -------------------------------------------------------------------------
+    # 4. Wait for Trilio operator pods to terminate
+    # -------------------------------------------------------------------------
+    - name: Wait for Trilio operator pods to terminate (up to 3 min)
+      ansible.builtin.shell: |
+        kubectl get pods -n {{ trilio_namespace }} \
+          -l app=k8s-triliovault --no-headers 2>/dev/null | wc -l
+      register: _trilio_pods
+      until: _trilio_pods.stdout | int == 0
+      retries: 18
+      delay: 10
+      changed_when: false
+      ignore_errors: true
+
+    # -------------------------------------------------------------------------
+    # 5. Delete CSV
+    # -------------------------------------------------------------------------
+    - name: Get Trilio CSV name
+      ansible.builtin.shell: |
+        kubectl get csv -n {{ trilio_namespace }} --no-headers 2>/dev/null | \
+          grep {{ trilio_csv_prefix }} | awk '{print $1}'
+      register: _trilio_csv
+      changed_when: false
+      ignore_errors: true
+
+    - name: Delete Trilio CSV
+      kubernetes.core.k8s:
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        name: "{{ _trilio_csv.stdout }}"
+        namespace: "{{ trilio_namespace }}"
+        state: absent
+      when: _trilio_csv.stdout | length > 0
+      ignore_errors: true
+
+    # -------------------------------------------------------------------------
+    # 6. Delete ArgoCD child apps (cascade-deletes their managed resources)
+    # -------------------------------------------------------------------------
+    - name: Delete ArgoCD child apps
+      kubernetes.core.k8s:
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        name: "{{ item }}"
+        namespace: "{{ spoke_argocd_namespace }}"
+        state: absent
+      loop: "{{ child_apps }}"
+      ignore_errors: true
+
+    - name: Wait up to 2 min for child apps to disappear
+      kubernetes.core.k8s_info:
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        namespace: "{{ spoke_argocd_namespace }}"
+      register: _remaining_apps
+      until: _remaining_apps.resources | length == 0
+      retries: 12
+      delay: 10
+      ignore_errors: true
+
+    # -------------------------------------------------------------------------
+    # 7. Patch orphaned ArgoCD Application finalizers if namespace is stuck
+    # -------------------------------------------------------------------------
+    - name: Force-patch remaining Application finalizers (if any stuck)
+      ansible.builtin.shell: |
+        kubectl get applications.argoproj.io -n {{ spoke_argocd_namespace }} \
+          --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null | \
+        xargs -I {} kubectl patch applications.argoproj.io {} \
+          -n {{ spoke_argocd_namespace }} \
+          --type json -p '[{"op":"remove","path":"/metadata/finalizers"}]' 2>/dev/null || true
+      ignore_errors: true
+
+    - name: Delete app-of-apps from openshift-gitops
+      kubernetes.core.k8s:
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        name: "{{ app_of_apps_name }}"
+        namespace: "{{ hub_gitops_namespace }}"
+        state: absent
+      ignore_errors: true
+
+    # -------------------------------------------------------------------------
+    # 8. Delete remaining pattern namespaces
+    # -------------------------------------------------------------------------
+    - name: Delete pattern namespaces
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ item }}"
+        state: absent
+      loop: "{{ pattern_namespaces }}"
+      ignore_errors: true
+
+    - name: Wait up to 3 min for namespaces to terminate
+      ansible.builtin.shell: |
+        kubectl get namespace {{ item }} --no-headers 2>/dev/null | wc -l
+      register: _ns_check
+      until: _ns_check.stdout | int == 0
+      retries: 18
+      delay: 10
+      loop: "{{ pattern_namespaces }}"
+      changed_when: false
+      ignore_errors: true
+
+    # -------------------------------------------------------------------------
+    # 9. Delete Trilio CRDs (required for clean re-install)
+    # -------------------------------------------------------------------------
+    - name: Get Trilio CRDs
+      ansible.builtin.shell: |
+        kubectl get crd --no-headers 2>/dev/null | grep trilio | awk '{print $1}'
+      register: _trilio_crds
+      changed_when: false
+
+    - name: Delete Trilio CRDs
+      ansible.builtin.shell: |
+        kubectl delete crd {{ _trilio_crds.stdout_lines | join(' ') }} --ignore-not-found
+      when: _trilio_crds.stdout_lines | length > 0
+
+    # -------------------------------------------------------------------------
+    # Summary
+    # -------------------------------------------------------------------------
+    - name: Verify spoke is clean
+      ansible.builtin.shell: |
+        echo "=== Remaining pattern namespaces ==="
+        kubectl get namespace 2>/dev/null | \
+          grep -E "trilio|wordpress-restore|imperative|dallas-multi" || echo "  none"
+        echo "=== Remaining Trilio CRDs ==="
+        kubectl get crd 2>/dev/null | grep trilio || echo "  none"
+        echo "=== Remaining ArgoCD Applications ==="
+        kubectl get applications.argoproj.io -A --no-headers 2>/dev/null || echo "  none"
+      register: _verify
+      changed_when: false
+
+    - name: Show cleanup summary
+      ansible.builtin.debug:
+        msg: "{{ _verify.stdout_lines }}"
