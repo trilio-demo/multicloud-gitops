@@ -3,7 +3,11 @@ trilio:
   channel: "5.3.x"
   instanceName: "{{ .Values.global.localClusterName }}"
   namespace: trilio-system
-  # Add other TrilioVaultManager spec fields as needed
+  # licenseSecretRef controls the License CR format:
+  #   false (default) — 5.2.x format: spec.key (inline key from Secret)
+  #   true            — 5.3.x format: spec.secretRef (Secret name/namespace)
+  # Set to true in values overrides when spoke is running 5.3.x.
+  licenseSecretRef: false
 
 # BackupTarget: S3-compatible object store for Trilio backups.
 # Credentials (accessKey, secretKey) are pulled from Vault via ESO:
