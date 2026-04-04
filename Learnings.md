@@ -997,3 +997,229 @@ oc auth can-i create restores.triliovault.trilio.io \
 - **Idempotency is built in, not bolted on.** Each playbook checks for completion before doing any work. Re-running the framework 100 times does not create 100 backups — it creates one, then skips on every subsequent run.
 - **The ConfigMap is the status API.** External monitoring tools, dashboards, or CI pipelines can read `trilio-dr-status` in the `imperative` namespace to check DR health without parsing pod logs.
 - **RBAC lives in the trilio-operand chart.** This means the ClusterRole is applied to every cluster that has the trilio-operand ArgoCD Application — currently the hub only. If a spoke ever runs imperative jobs, the chart already covers it.
+
+---
+
+## Req 13 — Full Pattern Teardown Runbook
+
+Use this runbook to completely remove the Trilio GitOps Validated Pattern from both clusters.
+The order matters: **spoke first, then hub**. If you tear down the hub first, ACM loses the
+ability to clean up spoke-side resources it placed there.
+
+**Goal of this runbook:** leave both clusters in a state where `make install` + `make onboard-spoke`
+returns them to full operation from scratch. ODF on the spoke is intentionally preserved.
+
+---
+
+### Inventory (validated 2026-04-04)
+
+**Hub (ocp-dc6):**
+```
+ArgoCD app-of-apps:  openshift-gitops/dallas-multicloudops-hub
+Child apps (ns dallas-multicloudops-hub): acm, vault, golang-external-secrets,
+  trilio-secrets, trilio-operand, wordpress, wordpress-restore, config-demo, hello-world
+ACM ManagedClusters: local-cluster, dr-cluster
+OLM Subscriptions (ACM-placed, survive ArgoCD): patterns-operator, k8s-triliovault
+Namespaces owned by pattern: vault, trilio-system, wordpress, wordpress-restore,
+  imperative, golang-external-secrets, config-demo, hello-world, dallas-multicloudops-hub
+```
+
+**Spoke (ocp-dc12 / dr-cluster):**
+```
+ArgoCD app-of-apps:  openshift-gitops/dallas-multicloudops-group-one
+Child apps (ns dallas-multicloudops-group-one): trilio-operand, trilio-secrets,
+  golang-external-secrets, wordpress-restore, config-demo, hello-world
+OLM Subscriptions (ACM-placed, survive ArgoCD): openshift-gitops-operator, k8s-triliovault
+Namespaces owned by pattern: trilio-system, wordpress-restore, imperative,
+  golang-external-secrets, config-demo, hello-world, dallas-multicloudops-group-one
+Do NOT remove: openshift-storage (ODF — pre-req, not pattern-owned)
+```
+
+---
+
+### Phase 1 — Spoke Teardown (context: ocp-dc12)
+
+#### Step 1 — Remove the ACM cluster label to stop re-provisioning
+
+Before deleting anything, remove the label that causes ACM to re-push the stack.
+Without this, ACM will re-create resources as fast as you delete them.
+
+```bash
+# On hub context
+oc label managedcluster dr-cluster clusterGroup-
+# The trailing '-' removes the label (standard kubectl/oc syntax)
+```
+
+#### Step 2 — Delete the app-of-apps (cascade-deletes all child apps and their resources)
+
+```bash
+# On spoke context
+oc delete applications.argoproj.io dallas-multicloudops-group-one \
+  -n openshift-gitops --wait
+# ArgoCD cascade-deletes all child apps and the resources they manage
+# (trilio-operand, trilio-secrets, wordpress-restore, etc.)
+```
+
+#### Step 3 — Remove Trilio finalizers if namespace deletion stalls
+
+Trilio CRs carry finalizers that can block namespace deletion if the operator
+is removed before the CRs are cleaned up.
+
+```bash
+oc patch triliovaultmanager triliovault-manager -n trilio-system \
+  --type json -p '[{"op":"remove","path":"/metadata/finalizers"}]' 2>/dev/null || true
+
+oc delete namespace trilio-system --wait=false
+oc delete namespace wordpress-restore --wait=false
+```
+
+#### Step 4 — Remove ACM-placed OLM Subscriptions
+
+These were placed by ACM's ConfigurationPolicy and survive ArgoCD deletion.
+
+```bash
+oc delete subscription.operators.coreos.com k8s-triliovault \
+  -n trilio-system --ignore-not-found
+oc delete csv k8s-triliovault-stable.5.2.0 \
+  -n openshift-operators --ignore-not-found
+```
+
+#### Step 5 — Remove Trilio CRDs (required for clean re-install)
+
+CRDs survive namespace deletion. Remove them so OLM re-registers fresh on next install.
+
+```bash
+oc get crd | grep trilio | awk '{print $1}' | xargs oc delete crd --ignore-not-found
+```
+
+#### Step 6 — (Optional) Remove ESO
+
+Skip this to save ~5 min on re-install. ESO is stateless — leaving it causes no issues.
+
+```bash
+oc delete subscription.operators.coreos.com golang-external-secrets \
+  -n openshift-operators --ignore-not-found
+oc delete namespace golang-external-secrets --ignore-not-found
+```
+
+#### Step 7 — (Optional) Remove OpenShift GitOps operator
+
+Only needed if you want to test ACM re-installing ArgoCD from scratch.
+
+```bash
+oc delete subscription.operators.coreos.com openshift-gitops-operator \
+  -n openshift-operators --ignore-not-found
+oc delete namespace openshift-gitops --wait=false
+oc delete namespace dallas-multicloudops-group-one --wait=false
+```
+
+**Verify spoke is clean:**
+```bash
+oc get applications.argoproj.io -A       # should be empty
+oc get namespace | grep -E "trilio|wordpress-restore|imperative"  # should be gone
+oc get crd | grep trilio                 # should be empty
+```
+
+---
+
+### Phase 2 — Hub Teardown (context: ocp-dc6)
+
+#### Step 1 — Delete the hub app-of-apps
+
+```bash
+oc delete applications.argoproj.io dallas-multicloudops-hub \
+  -n openshift-gitops --wait
+# Cascade-deletes all hub child apps and their managed resources:
+# acm chart, vault, ESO, trilio-operand, wordpress, wordpress-restore, etc.
+```
+
+#### Step 2 — Remove Trilio finalizers and namespaces
+
+```bash
+oc patch triliovaultmanager triliovault-manager -n trilio-system \
+  --type json -p '[{"op":"remove","path":"/metadata/finalizers"}]' 2>/dev/null || true
+
+oc delete namespace trilio-system --wait=false
+oc delete namespace wordpress --wait=false
+oc delete namespace wordpress-restore --wait=false
+oc delete namespace vault --wait=false
+oc delete namespace imperative --wait=false
+```
+
+#### Step 3 — Remove ACM-placed OLM Subscriptions
+
+```bash
+oc delete subscription.operators.coreos.com k8s-triliovault \
+  -n trilio-system --ignore-not-found
+oc delete csv k8s-triliovault-stable.5.2.0 \
+  -n openshift-operators --ignore-not-found
+```
+
+#### Step 4 — Remove Trilio CRDs
+
+```bash
+oc get crd | grep trilio | awk '{print $1}' | xargs oc delete crd --ignore-not-found
+```
+
+#### Step 5 — Remove ACM cluster registration for dr-cluster
+
+```bash
+oc delete managedcluster dr-cluster --ignore-not-found
+# This also removes the ACM namespace for the cluster
+```
+
+#### Step 6 — Remove the Patterns Operator
+
+The VP framework operator (patterns-operator) was installed by `make install`. Remove it last
+so it doesn't interfere with ArgoCD cleanup above.
+
+```bash
+oc delete subscription.operators.coreos.com patterns-operator \
+  -n openshift-operators --ignore-not-found
+oc get csv -n openshift-operators | grep patterns | awk '{print $1}' \
+  | xargs oc delete csv -n openshift-operators --ignore-not-found
+```
+
+**Verify hub is clean:**
+```bash
+oc get applications.argoproj.io -A
+oc get namespace | grep -E "trilio|wordpress|vault|imperative|dallas-multi"
+oc get crd | grep trilio
+oc get managedcluster
+```
+
+---
+
+### Re-install from scratch
+
+Once both clusters are clean:
+
+```bash
+# 1. On hub — re-bootstrap
+make install   # loads secrets + deploys full hub stack
+
+# 2. Wait for hub ArgoCD apps to reach Synced/Healthy (~10-15 min)
+make dr-status
+
+# 3. Onboard spoke
+make onboard-spoke CLUSTER=dr-cluster
+```
+
+---
+
+### Key Teardown Insights
+
+- **Label removal first.** Always remove `clusterGroup=group-one` from the spoke ManagedCluster
+  before deleting anything. ACM's controller reconciles continuously — it will re-create
+  ConfigurationPolicy-placed resources within seconds if the label is still present.
+- **ArgoCD cascade delete is your friend.** Deleting the app-of-apps with `--wait` removes
+  all child apps and their managed Kubernetes resources in one operation. You do not need to
+  delete child apps individually.
+- **OLM Subscriptions are the exception.** Anything installed via ACM ConfigurationPolicy
+  (Trilio subscription, GitOps operator subscription) is not owned by ArgoCD and survives
+  app-of-apps deletion. These require explicit `oc delete subscription` commands.
+- **Finalizers block namespace deletion.** Trilio CRs have finalizers. If the operator is
+  removed before the CRs are garbage-collected, namespaces hang in `Terminating`. Patch the
+  TrilioVaultManager finalizer explicitly before deleting the namespace.
+- **ODF is never touched.** The `openshift-storage` namespace and all ODF resources on the
+  spoke are pre-existing infrastructure. No teardown step touches them.
