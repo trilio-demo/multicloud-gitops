@@ -22,8 +22,9 @@
 #   5. Disable app-of-apps automated sync — stops child regeneration
 #   6. Delete ArgoCD child apps
 #   7. Delete app-of-apps (after children are gone)
-#   8. Delete remaining namespaces
-#   9. Delete Trilio CRDs
+#   8. Delete Trilio webhook configurations (prevents namespace deletion 500s)
+#   9. Delete remaining namespaces
+#  10. Delete Trilio CRDs
 #
 # What is NOT removed:
 #   - ODF / openshift-storage (pre-req infrastructure, not pattern-owned)
@@ -202,7 +203,27 @@
       ignore_errors: true
 
     # -------------------------------------------------------------------------
-    # 8. Delete remaining pattern namespaces
+    # 8. Delete Trilio webhook configurations before namespace deletion
+    #    The admission webhook service is gone (operator deleted) but the
+    #    ValidatingWebhookConfiguration still exists. Any namespace delete
+    #    that triggers it gets a 500 — must remove webhooks first.
+    # -------------------------------------------------------------------------
+    - name: Delete Trilio ValidatingWebhookConfigurations
+      ansible.builtin.shell: |
+        kubectl get validatingwebhookconfiguration --no-headers 2>/dev/null | \
+          grep -i trilio | awk '{print $1}' | \
+          xargs -r kubectl delete validatingwebhookconfiguration --ignore-not-found
+      ignore_errors: true
+
+    - name: Delete Trilio MutatingWebhookConfigurations
+      ansible.builtin.shell: |
+        kubectl get mutatingwebhookconfiguration --no-headers 2>/dev/null | \
+          grep -i trilio | awk '{print $1}' | \
+          xargs -r kubectl delete mutatingwebhookconfiguration --ignore-not-found
+      ignore_errors: true
+
+    # -------------------------------------------------------------------------
+    # 9. Delete remaining pattern namespaces
     # -------------------------------------------------------------------------
     - name: Delete pattern namespaces
       kubernetes.core.k8s:
@@ -225,7 +246,7 @@
       ignore_errors: true
 
     # -------------------------------------------------------------------------
-    # 9. Delete Trilio CRDs (required for clean re-install)
+    # 10. Delete Trilio CRDs (required for clean re-install)
     # -------------------------------------------------------------------------
     - name: Get Trilio CRDs
       ansible.builtin.shell: |
