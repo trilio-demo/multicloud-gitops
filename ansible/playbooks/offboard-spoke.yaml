@@ -39,7 +39,6 @@
 
   vars:
     spoke_cluster_name: "{{ spoke_cluster_name | mandatory }}"
-    spoke_kubeconfig: "{{ spoke_kubeconfig | default(omit) }}"
     trilio_namespace: trilio-system
     trilio_csv_prefix: "k8s-triliovault-stable"
     app_of_apps_name: "dallas-multicloudops-group-one"
