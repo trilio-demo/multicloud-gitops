@@ -60,6 +60,7 @@
       - golang-external-secrets
       - config-demo
       - hello-world
+      - dallas-multicloudops-group-one
 
   tasks:
 
@@ -192,14 +193,19 @@
 
     # -------------------------------------------------------------------------
     # 7. Delete app-of-apps last (children are gone, safe to remove)
+    #    Patch cascade-delete finalizer first — it gets stuck when the
+    #    child namespace is already gone and ArgoCD can't complete cleanup.
     # -------------------------------------------------------------------------
+    - name: Patch app-of-apps finalizer to unblock deletion
+      ansible.builtin.shell: |
+        kubectl patch application {{ app_of_apps_name }} -n {{ hub_gitops_namespace }} \
+          --type json -p '[{"op":"remove","path":"/metadata/finalizers"}]' 2>/dev/null || true
+      ignore_errors: true
+
     - name: Delete app-of-apps from openshift-gitops
-      kubernetes.core.k8s:
-        api_version: argoproj.io/v1alpha1
-        kind: Application
-        name: "{{ app_of_apps_name }}"
-        namespace: "{{ hub_gitops_namespace }}"
-        state: absent
+      ansible.builtin.shell: |
+        kubectl delete application {{ app_of_apps_name }} -n {{ hub_gitops_namespace }} \
+          --ignore-not-found
       ignore_errors: true
 
     # -------------------------------------------------------------------------
