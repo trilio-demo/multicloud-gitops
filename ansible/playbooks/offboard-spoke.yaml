@@ -37,6 +37,12 @@
   connection: local
   gather_facts: false
 
+  module_defaults:
+    kubernetes.core.k8s:
+      kubeconfig: "{{ lookup('env', 'KUBECONFIG') }}"
+    kubernetes.core.k8s_info:
+      kubeconfig: "{{ lookup('env', 'KUBECONFIG') }}"
+
   vars:
     spoke_cluster_name: "{{ spoke_cluster_name | mandatory }}"
     trilio_namespace: trilio-system
