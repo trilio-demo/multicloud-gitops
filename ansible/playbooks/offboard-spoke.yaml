@@ -75,7 +75,7 @@
     # -------------------------------------------------------------------------
     - name: Get all Trilio CRs with finalizers across all namespaces
       ansible.builtin.shell: |
-        for kind in triliovaultmanagers targets backupplans backups restores hooks policies; do
+        for kind in triliovaultmanagers licenses targets backupplans backups restores hooks policies; do
           kubectl get ${kind}.triliovault.trilio.io -A --no-headers \
             -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name 2>/dev/null | \
           while read ns name; do
