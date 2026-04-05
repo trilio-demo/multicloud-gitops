@@ -104,7 +104,7 @@ Each item maps to a deliverable in the Implementation Matrix below.
 | 10 | Spoke onboarding: resolve OLM/ArgoCD race condition so trilio-operand self-heals without manual sync | P1 — Done |
 | 11 | Pattern documentation (`Document.md`) for publication on validatedpatterns.io — comprehensive usage manual for pattern adopters | P1 — Not Started |
 | 12 | Imperative Framework Automation: full E2E DR lifecycle driven by VP imperative jobs — backup on hub ready, enable Continuous Restore when DR cluster joins, restore + validate when ConsistentSet present, alert on success/failure | P0 — Done |
-| 13 | VP Uninstall: validate Pattern CR deletion teardown; document finalizer cleanup; confirm ODF is preserved; verify spoke disassociation from ACM | P2 — Done |
+| 13 | VP Uninstall: validate Pattern CR deletion teardown; document finalizer cleanup; confirm ODF is preserved; verify spoke disassociation from ACM | P2 — In Progress |
 | 14 | Remove multicloud-gitops upstream overhead (hello-world, config-demo, RHDP-specific workflows where appropriate); retain or comment items with future value; document every decision | P1 — Not Started |
 | 15 | Publish clean pattern to new public GitHub repo `trilio-continuous-restore`: update all metadata, RHDP workflow references, pattern name throughout; disconnect from multicloud-gitops lineage while preserving VP framework compatibility | P1 — Not Started |
 
@@ -384,6 +384,19 @@ The latest Validated Patterns framework supports pattern uninstall via deletion 
 
 **Out of scope:** ODF removal, OpenShift upgrade, or cluster decommission.
 
+**Status (2026-04-05 — In Progress):**
+
+*Spoke offboard:*
+- Manual teardown runbook validated (2026-04-05) — followed steps in Learnings.md, spoke fully cleaned and re-onboarded successfully with 5.3.x
+- `offboard-spoke.yaml` Ansible playbook created (`ansible/playbooks/offboard-spoke.yaml`) covering all 9 steps; `make offboard-spoke CLUSTER=<name>` target added
+- Playbook automation not yet run against a live cluster — scheduled for validation 2026-04-05 evening
+
+*Hub offboard:*
+- No playbook created yet
+- Manual steps not yet documented or tested
+- Hub teardown requires different approach: Pattern CR deletion (VP framework) vs. spoke's label-removal + ArgoCD cascade approach
+- **Planned:** document hub manual teardown first, then automate — pick up 2026-04-06
+
 ---
 
 ### Req 15 — Publish to New Public GitHub Repo: trilio-continuous-restore
@@ -590,7 +603,7 @@ All pattern bootstrap and operational tooling runs inside the **Red Hat Validate
 | Trilio 5.3.x native license-via-Secret (Req 9) | Add 5.3.x License Secret ref to TVM spec; bump OLM channel to 5.3.x; retain Job for 5.2.x backwards compatibility | Upgrade validates automatically; License CR converts; no manual steps | In Progress (manifests in hand) |
 | Pattern documentation for validatedpatterns.io (Req 11) | `Document.md` in repo root — usage manual for pattern adopters covering architecture, deployment, operations, and troubleshooting | Document pulled by RH VP team; published on validatedpatterns.io | Not Started |
 | Imperative Framework Automation — E2E DR lifecycle (Req 12) | 7 imperative playbooks wired into `values-hub.yaml` `imperative.jobs`; 4-phase pipeline: validate → backup → enable CR → wait CS → restore → validate restore → alert | Full E2E DR cycle completes automatically after clusters up; PASS/FAIL alert emitted | Not Started |
-| VP Uninstall teardown validation (Req 13) | Delete Pattern CR; document finalizer cleanup; confirm ODF preserved; confirm spoke disassociation | Hub clean (no VP namespaces/Trilio/ArgoCD apps); spoke standalone and functional; ODF intact | Not Started |
+| VP Uninstall teardown validation (Req 13) | Delete Pattern CR; document finalizer cleanup; confirm ODF preserved; confirm spoke disassociation | Hub clean (no VP namespaces/Trilio/ArgoCD apps); spoke standalone and functional; ODF intact | In Progress — spoke manual runbook validated; offboard-spoke.yaml playbook created (not yet run); hub offboard not started |
 
 > Update this table as new requirements are implemented and validated.
 
