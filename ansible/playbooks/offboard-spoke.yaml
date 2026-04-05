@@ -19,10 +19,11 @@
 #   2. Delete Trilio OLM Subscription — graceful operator removal
 #   3. Wait for operator pods to terminate
 #   4. Delete CSV — confirms operator fully removed
-#   5. Delete ArgoCD child apps — triggers cascade resource deletion
-#   6. Patch orphaned ArgoCD Application finalizers if needed
-#   7. Delete remaining namespaces
-#   8. Delete Trilio CRDs
+#   5. Disable app-of-apps automated sync — stops child regeneration
+#   6. Delete ArgoCD child apps
+#   7. Delete app-of-apps (after children are gone)
+#   8. Delete remaining namespaces
+#   9. Delete Trilio CRDs
 #
 # What is NOT removed:
 #   - ODF / openshift-storage (pre-req infrastructure, not pattern-owned)
@@ -141,7 +142,22 @@
       ignore_errors: true
 
     # -------------------------------------------------------------------------
-    # 5. Delete ArgoCD child apps (cascade-deletes their managed resources)
+    # 5. Disable app-of-apps automated sync — stops child app regeneration
+    #    without deleting the app-of-apps itself (safer than deleting it;
+    #    ACM label already removed so ACM won't re-enable sync)
+    # -------------------------------------------------------------------------
+    - name: Disable app-of-apps automated sync
+      ansible.builtin.shell: |
+        kubectl patch application {{ app_of_apps_name }} -n {{ hub_gitops_namespace }} \
+          --type merge -p '{"spec":{"syncPolicy":null}}' 2>/dev/null || true
+      ignore_errors: true
+
+    - name: Wait 10s for sync disable to take effect
+      ansible.builtin.pause:
+        seconds: 10
+
+    # -------------------------------------------------------------------------
+    # 6. Delete ArgoCD child apps — app-of-apps will not regenerate them
     # -------------------------------------------------------------------------
     - name: Delete ArgoCD child apps
       kubernetes.core.k8s:
@@ -151,6 +167,15 @@
         namespace: "{{ spoke_argocd_namespace }}"
         state: absent
       loop: "{{ child_apps }}"
+      ignore_errors: true
+
+    - name: Force-patch remaining Application finalizers (if any stuck)
+      ansible.builtin.shell: |
+        kubectl get applications.argoproj.io -n {{ spoke_argocd_namespace }} \
+          --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null | \
+        xargs -I {} kubectl patch applications.argoproj.io {} \
+          -n {{ spoke_argocd_namespace }} \
+          --type json -p '[{"op":"remove","path":"/metadata/finalizers"}]' 2>/dev/null || true
       ignore_errors: true
 
     - name: Wait up to 2 min for child apps to disappear
@@ -165,17 +190,8 @@
       ignore_errors: true
 
     # -------------------------------------------------------------------------
-    # 6. Patch orphaned ArgoCD Application finalizers if namespace is stuck
+    # 7. Delete app-of-apps last (children are gone, safe to remove)
     # -------------------------------------------------------------------------
-    - name: Force-patch remaining Application finalizers (if any stuck)
-      ansible.builtin.shell: |
-        kubectl get applications.argoproj.io -n {{ spoke_argocd_namespace }} \
-          --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null | \
-        xargs -I {} kubectl patch applications.argoproj.io {} \
-          -n {{ spoke_argocd_namespace }} \
-          --type json -p '[{"op":"remove","path":"/metadata/finalizers"}]' 2>/dev/null || true
-      ignore_errors: true
-
     - name: Delete app-of-apps from openshift-gitops
       kubernetes.core.k8s:
         api_version: argoproj.io/v1alpha1
@@ -186,7 +202,7 @@
       ignore_errors: true
 
     # -------------------------------------------------------------------------
-    # 7. Delete remaining pattern namespaces
+    # 8. Delete remaining pattern namespaces
     # -------------------------------------------------------------------------
     - name: Delete pattern namespaces
       kubernetes.core.k8s:
@@ -209,7 +225,7 @@
       ignore_errors: true
 
     # -------------------------------------------------------------------------
-    # 8. Delete Trilio CRDs (required for clean re-install)
+    # 9. Delete Trilio CRDs (required for clean re-install)
     # -------------------------------------------------------------------------
     - name: Get Trilio CRDs
       ansible.builtin.shell: |
