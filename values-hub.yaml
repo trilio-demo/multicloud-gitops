@@ -21,8 +21,9 @@ clusterGroup:
     trilio:
       name: k8s-triliovault
       namespace: trilio-system
-      channel: 5.2.x
+      channel: 5.3.x
       source: certified-operators
+      installPlanApproval: Manual
   argoProjects:
     - hub
     - config-demo
@@ -101,6 +102,8 @@ clusterGroup:
           value: sa-demo-2
         - name: backupTarget.region
           value: ca-central-1
+        - name: trilio.licenseSecretRef
+          value: "true"
       syncPolicy:
         automated: {}
         retry:
