@@ -1223,3 +1223,218 @@ make onboard-spoke CLUSTER=dr-cluster
   TrilioVaultManager finalizer explicitly before deleting the namespace.
 - **ODF is never touched.** The `openshift-storage` namespace and all ODF resources on the
   spoke are pre-existing infrastructure. No teardown step touches them.
+
+---
+
+## Trilio 5.3.x Upgrade Learnings
+
+Validated 2026-04-05. Both hub and spoke upgraded from 5.2.0 to 5.3.x. These notes cover every
+issue encountered; use them as a runbook for future upgrades or when troubleshooting 5.3.x.
+
+---
+
+### 1. License Key Backslashes Break 5.3.x
+
+**Symptom:** TrilioVaultManager stays `Failed`; TVK UI shows "Unable to decode license key".
+
+**Root cause:** The license key string stored in Vault contained backslash characters (common
+when copying from a license email or PDF). Trilio 5.2.x read the license via a shell variable
+assignment that implicitly stripped backslashes; 5.3.x reads raw Secret bytes directly — the
+backslashes are passed to the decoder and it fails.
+
+**Fix:** Strip backslashes before writing to Vault:
+
+```bash
+# Write license key with backslashes stripped
+LICENSE_RAW='<paste raw key here>'
+LICENSE_CLEAN=$(echo "$LICENSE_RAW" | tr -d '\\')
+
+VAULT_TOKEN=$(oc get secret vaultkeys -n imperative \
+  -o jsonpath='{.data.vault_data_json}' | \
+  base64 -d | python3 -c "import sys,json; print(json.load(sys.stdin)['root_token'])")
+
+oc exec -n vault vault-0 -- env VAULT_TOKEN=$VAULT_TOKEN \
+  vault kv put secret/global/trilio-license trilioLicense="$LICENSE_CLEAN"
+```
+
+**Verify** the stored value contains no backslashes:
+
+```bash
+oc exec -n vault vault-0 -- env VAULT_TOKEN=$VAULT_TOKEN \
+  vault kv get -field=trilioLicense secret/global/trilio-license | cat -A
+# No backslashes should appear in output
+```
+
+---
+
+### 2. ESO ExternalSecret Template Section Corrupts Backslashes
+
+**Symptom:** Even after fixing Vault, the `trilioLicense` Secret in-cluster still contains
+backslashes — or worse, double-escaped sequences.
+
+**Root cause:** The ExternalSecret had a `template:` section that piped values through Go
+template processing. Go templates perform their own escape interpretation on string data,
+re-introducing backslashes that were already absent from Vault.
+
+**Fix:** Remove the `template:` section entirely from the ExternalSecret. Use the `data:`
+section only — ESO copies Vault property values verbatim with no template processing:
+
+```yaml
+# charts/all/trilio-secrets/templates/trilio-license-external-secret.yaml
+spec:
+  data:
+    - secretKey: key            # for 5.2.x License Job
+      remoteRef:
+        key: secret/global/trilio-license
+        property: trilioLicense
+    - secretKey: trilioLicense  # for 5.3.x native secretRef
+      remoteRef:
+        key: secret/global/trilio-license
+        property: trilioLicense
+```
+
+Both keys map to the same Vault property. The 5.2.x License Job reads `data.key`; the 5.3.x
+TrilioVaultManager reads `data.trilioLicense` via `spec.licenseRef.secretRef`. This dual-key
+approach allows the same chart to work on either Trilio version without a code branch.
+
+---
+
+### 3. S3 Bucket Region: 5.3.x Does Not Follow PermanentRedirect (301)
+
+**Symptom:** BackupTarget stays `Failed`; Trilio logs show an S3 error similar to
+`PermanentRedirect: The bucket you are attempting to access must be addressed using the
+specified endpoint`.
+
+**Root cause:** The S3 bucket `sa-demo-2` was migrated from `us-east-1` to `ca-central-1`.
+Trilio 5.2.x silently followed the S3 301 PermanentRedirect response and reached the bucket
+successfully. Trilio 5.3.x does **not** follow 301 redirects — it treats the redirect as an
+error and marks the Target `Failed`.
+
+**Fix:** Set the correct region explicitly in all values files:
+
+```yaml
+# values-hub.yaml and values-group-one.yaml — under trilio-operand helmOverrides
+- name: backupTarget.region
+  value: ca-central-1
+```
+
+Also update the default in `charts/all/trilio-operand/values.yaml`:
+
+```yaml
+backupTarget:
+  region: ca-central-1
+```
+
+**Key lesson:** Never rely on S3 redirect following in Trilio 5.3.x. Always set `region` to
+match the actual bucket location.
+
+---
+
+### 4. T4K Version Mismatch Blocks Continuous Restore
+
+**Symptom:** TVK UI shows "Mismatching T4K versions" on the Continuous Restore (CR) screen.
+The spoke appears in the hub's target but is rejected as a CR destination.
+
+**Root cause:** Continuous Restore requires identical Trilio versions on all participating
+clusters. A hub on 5.2.x and a spoke on 5.3.x are incompatible at the CR protocol level.
+
+**Fix:** Upgrade both clusters to the same version before enabling CR. In this pattern, hub
+uses `installPlanApproval: Manual` for the OLM Subscription — approve the InstallPlan on the
+hub to advance it to 5.3.x:
+
+```bash
+# On hub — find and approve the pending InstallPlan
+PLAN=$(oc get installplan -n trilio-system -o jsonpath='{.items[?(@.spec.approved==false)].metadata.name}')
+oc patch installplan $PLAN -n trilio-system --type merge -p '{"spec":{"approved":true}}'
+```
+
+Wait for TVM to report `Deployed` or `Updated`, then re-validate CR pairing in the TVK UI.
+
+Note: As of this upgrade, the hub Subscription was also changed to `installPlanApproval: Manual`
+(consistent with the spoke) so future upgrades are always deliberate and require explicit approval.
+
+---
+
+### 5. License CR Auto-Migration During 5.2.x → 5.3.x Upgrade
+
+**Symptom (non-issue):** After the hub OLM upgrade completes, the existing License CR still
+shows `spec.key` (5.2.x format) in Git, but the cluster-side CR is in `spec.secretRef` format.
+
+**Explanation:** The 5.3.x TrilioVaultManager controller automatically migrates an existing
+`spec.key` License CR to `spec.secretRef` format on first reconciliation. No manual deletion or
+re-creation is required. The License Job workaround remains in place; the License CR is now
+managed by TVM and uses the native 5.3.x format.
+
+You do not need to delete and re-create the License CR when upgrading from 5.2.x to 5.3.x.
+
+---
+
+### 6. Stale CR BackupPlan instanceID After Spoke Reinstall
+
+**Symptom:** After offboarding and re-onboarding a spoke, the hub's Continuous Restore
+BackupPlan (`wordpress-backup-plan-cr`) fails to create ConsistentSets. TVK UI may show the
+old spoke instance as unavailable.
+
+**Root cause:** The CR BackupPlan references the spoke TVM's instanceID. After reinstall, the
+spoke gets a new instanceID. The old instanceID is stale.
+
+**Verify the current available instances on the target:**
+
+```bash
+oc get target trilio-s3-target -n trilio-system \
+  -o jsonpath='{.status.availableContinuousRestoreInstances}' | python3 -m json.tool
+```
+
+The spoke self-registers in `status.availableContinuousRestoreInstances` on the hub's Target
+after a successful onboarding (typically within 5–10 minutes of the TVM reaching `Deployed`).
+
+**Fix:** Use the TVK UI to edit the CR BackupPlan and select the newly registered spoke
+instance. There is no `oc patch` shortcut — the instanceID is embedded in the BackupPlan spec
+and the TVK UI is the supported way to update it.
+
+---
+
+### 7. Stale ConfigMap Key Survives `kubernetes.core.k8s state: present`
+
+**Symptom:** The `trilio-dr-status` ConfigMap on the hub contains a key that no longer exists
+in any playbook (e.g., `phase3b_consistent_set` renamed to `phase3b_cr_backup`).
+
+**Root cause:** `kubernetes.core.k8s` with `state: present` performs a strategic merge — it
+adds or updates keys but never removes keys that are no longer in the provided data. Renamed
+keys accumulate as dead entries.
+
+**Fix:** Remove the stale key with a JSON patch:
+
+```bash
+oc patch configmap trilio-dr-status -n imperative \
+  --type=json \
+  -p '[{"op":"remove","path":"/data/phase3b_consistent_set"}]'
+```
+
+**Prevention:** When renaming a ConfigMap key in a playbook, add an explicit task to remove
+the old key, or delete and re-create the ConfigMap in the playbook rather than relying on
+strategic merge.
+
+---
+
+### 8. installPlanApproval: Manual on Hub Subscription
+
+During the 5.3.x upgrade, the hub OLM Subscription was updated to use
+`installPlanApproval: Manual` (previously `Automatic`). This is now consistent with the spoke.
+
+**Rationale:** `Automatic` approval means any new Trilio version published to the channel is
+installed immediately without review — this caused the inadvertent 5.2.x → 5.3.x upgrade on
+the spoke before the hub was ready, triggering the T4K version mismatch. With `Manual` on both
+clusters, upgrades are gated: approve the spoke InstallPlan first, validate, then approve the
+hub InstallPlan.
+
+**Approve an InstallPlan:**
+
+```bash
+# List pending plans
+oc get installplan -n trilio-system
+
+# Approve
+PLAN=<install-plan-name>
+oc patch installplan $PLAN -n trilio-system --type merge -p '{"spec":{"approved":true}}'
+```

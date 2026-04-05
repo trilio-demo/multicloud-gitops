@@ -100,11 +100,11 @@ Each item maps to a deliverable in the Implementation Matrix below.
 | 7 | Continuous Restore via EventTarget: pre-stage PVCs on DR cluster from ConsistentBackupPlan for accelerated RTO | P1 — Done |
 | 7a | Hook CR support for ConsistentSet restores: post-restore URL rewrite via hookConfig (currently applied via direct database exec) | P2 — Not Started |
 | 8 | (Optional) Deploy a VM-based application (OpenShift Virtualization) | P2 — Deferred |
-| 9 | Upgrade to Trilio 5.3.x: adopt native license-via-Secret model; remove License Job workaround | P1 — In Progress (manifests in hand) |
+| 9 | Upgrade to Trilio 5.3.x: adopt native license-via-Secret model; remove License Job workaround | P1 — Done |
 | 10 | Spoke onboarding: resolve OLM/ArgoCD race condition so trilio-operand self-heals without manual sync | P1 — Done |
 | 11 | Pattern documentation (`Document.md`) for publication on validatedpatterns.io — comprehensive usage manual for pattern adopters | P1 — Not Started |
 | 12 | Imperative Framework Automation: full E2E DR lifecycle driven by VP imperative jobs — backup on hub ready, enable Continuous Restore when DR cluster joins, restore + validate when ConsistentSet present, alert on success/failure | P0 — Done |
-| 13 | VP Uninstall: validate Pattern CR deletion teardown; document finalizer cleanup; confirm ODF is preserved; verify spoke disassociation from ACM | P2 — Not Started |
+| 13 | VP Uninstall: validate Pattern CR deletion teardown; document finalizer cleanup; confirm ODF is preserved; verify spoke disassociation from ACM | P2 — Done |
 | 14 | Remove multicloud-gitops upstream overhead (hello-world, config-demo, RHDP-specific workflows where appropriate); retain or comment items with future value; document every decision | P1 — Not Started |
 | 15 | Publish clean pattern to new public GitHub repo `trilio-continuous-restore`: update all metadata, RHDP workflow references, pattern name throughout; disconnect from multicloud-gitops lineage while preserving VP framework compatibility | P1 — Not Started |
 
@@ -116,7 +116,7 @@ Each item maps to a deliverable in the Implementation Matrix below.
 Custom Helm chart at `charts/all/wordpress/` built from owner's existing manifests. Preserves `app: wordpress` / `tier: mysql` / `tier: frontend` labels (required for Trilio hook selectors). Replaces manual `oc adm policy add-scc-to-user anyuid` with a declarative ServiceAccount + RoleBinding. NodePort replaced with ClusterIP + OpenShift Route. Deployed to `wordpress` namespace on hub (primary) cluster via ArgoCD. Validated 2026-03-04.
 
 ### Req 3 — BackupTarget CR (All Clusters) ✓ DONE
-`trilio-s3-target` Target CR deployed in `trilio-system` on hub cluster via `charts/all/trilio-operand`. S3 credentials (`accessKey`/`secretKey`) stored in Vault at `secret/global/trilio-s3` as plain text; ESO ExternalSecret `trilio-s3-credentials` syncs them into `aws-s3-login` Secret within 5 minutes. BackupTarget reached `Available` state after correct credentials were stored. EventTarget annotation (`trilio.io/event-target: "true"`) set on all clusters. Bucket: `sa-demo-2`, region: `us-east-1`. Validated 2026-03-04.
+`trilio-s3-target` Target CR deployed in `trilio-system` on hub cluster via `charts/all/trilio-operand`. S3 credentials (`accessKey`/`secretKey`) stored in Vault at `secret/global/trilio-s3` as plain text; ESO ExternalSecret `trilio-s3-credentials` syncs them into `aws-s3-login` Secret within 5 minutes. BackupTarget reached `Available` state after correct credentials were stored. EventTarget annotation (`trilio.io/event-target: "true"`) set on all clusters. Bucket: `sa-demo-2`, region: `ca-central-1`. Validated 2026-03-04; region updated 2026-04-05 (bucket migrated from `us-east-1`).
 
 > **Note:** Credentials must be plain text in Vault — base64-encoded values cause double-encoding by ESO and result in a `Failed` Target state. See Learnings.md for the correct `oc exec` extraction and write commands.
 
