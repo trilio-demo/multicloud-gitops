@@ -37,12 +37,6 @@
   connection: local
   gather_facts: false
 
-  module_defaults:
-    kubernetes.core.k8s:
-      kubeconfig: "{{ lookup('env', 'KUBECONFIG') | default(omit, true) }}"
-    kubernetes.core.k8s_info:
-      kubeconfig: "{{ lookup('env', 'KUBECONFIG') | default(omit, true) }}"
-
   vars:
     spoke_cluster_name: "{{ spoke_cluster_name | mandatory }}"
     trilio_namespace: trilio-system
@@ -64,9 +58,6 @@
       - golang-external-secrets
       - config-demo
       - hello-world
-
-  environment:
-    KUBECONFIG: "{{ spoke_kubeconfig | default(lookup('env', 'KUBECONFIG')) }}"
 
   tasks:
 
