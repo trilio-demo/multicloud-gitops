@@ -386,16 +386,20 @@ The latest Validated Patterns framework supports pattern uninstall via deletion 
 
 **Status (2026-04-05 — In Progress):**
 
-*Spoke offboard:*
-- Manual teardown runbook validated (2026-04-05) — followed steps in Learnings.md, spoke fully cleaned and re-onboarded successfully with 5.3.x
-- `offboard-spoke.yaml` Ansible playbook created (`ansible/playbooks/offboard-spoke.yaml`) covering all 9 steps; `make offboard-spoke CLUSTER=<name>` target added
-- Playbook automation not yet run against a live cluster — scheduled for validation 2026-04-05 evening
+*Spoke offboard — Validated (2026-04-05):*
+- `offboard-spoke.yaml` playbook validated end-to-end against a live spoke cluster
+- Two-step process: `make unlabel-spoke CLUSTER=<name>` (hub context) then `make offboard-spoke CLUSTER=<name>` (spoke context)
+- Finalizer/webhook issues encountered and fixed during validation:
+  - Trilio `ValidatingWebhookConfiguration` and `MutatingWebhookConfiguration` must be deleted before namespace teardown (webhook service gone but config remains → 500 on all deletes)
+  - `License` CR has `license-delete-finalizer` — must be included in the CR finalizer-patch step
+  - App-of-apps automated sync must be disabled before deleting child apps (otherwise app-of-apps regenerates them immediately)
+  - App-of-apps has ArgoCD cascade-delete finalizer that gets stuck when child namespace is already gone — patch it before deleting
+  - `dallas-multicloudops-group-one` ArgoCD instance namespace must be in the cleanup list
 
 *Hub offboard:*
-- No playbook created yet
-- Manual steps not yet documented or tested
-- Hub teardown requires different approach: Pattern CR deletion (VP framework) vs. spoke's label-removal + ArgoCD cascade approach
-- **Planned:** document hub manual teardown first, then automate — pick up 2026-04-06
+- No playbook created yet; manual steps not yet documented or tested
+- Hub teardown is different: involves Pattern CR deletion (VP framework) rather than the spoke's label-removal + ArgoCD cascade approach
+- **Planned:** document and test hub manual teardown 2026-04-06, then automate
 
 ---
 
