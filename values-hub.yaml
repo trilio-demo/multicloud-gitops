@@ -99,6 +99,8 @@ clusterGroup:
       overrides:
         - name: backupTarget.bucketName
           value: sa-demo-2
+        - name: backupTarget.region
+          value: ca-central-1
       syncPolicy:
         automated: {}
         retry:

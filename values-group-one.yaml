@@ -63,6 +63,8 @@ clusterGroup:
       overrides:
         - name: backupTarget.bucketName
           value: sa-demo-2
+        - name: backupTarget.region
+          value: ca-central-1
         - name: trilio.licenseSecretRef
           value: "true"
       syncPolicy:

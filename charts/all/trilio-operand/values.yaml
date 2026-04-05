@@ -16,5 +16,5 @@ trilio:
 # or via helmOverrides in the application entry.
 backupTarget:
   bucketName: ""
-  region: us-east-1
+  region: ca-central-1
   enableBrowsing: true
