@@ -47,11 +47,20 @@ spoke-status: ## Check DR spoke onboarding and Continuous Restore status: make s
 	@echo "Spoke-side CR status (run on spoke context):"
 	@echo "  oc get configmap trilio-cr-status -n imperative -o yaml"
 
-.PHONY: offboard-spoke
-offboard-spoke: ## Remove pattern from a DR spoke (safe ordered teardown): make offboard-spoke CLUSTER=<name>
-	@echo "Offboarding spoke cluster: $(CLUSTER)"
+.PHONY: unlabel-spoke
+unlabel-spoke: ## Step 1 of offboard — remove ACM clusterGroup label (run on hub context): make unlabel-spoke CLUSTER=<name>
+	@[ -n "$(CLUSTER)" ] || (echo "ERROR: CLUSTER is required. Usage: make unlabel-spoke CLUSTER=<name>" && exit 1)
+	@echo "Removing clusterGroup label from ACM ManagedCluster: $(CLUSTER)"
 	@oc get managedcluster $(CLUSTER) > /dev/null 2>&1 || \
-	  (echo "ERROR: ManagedCluster '$(CLUSTER)' not found." && exit 1)
+	  (echo "ERROR: ManagedCluster '$(CLUSTER)' not found on this hub." && exit 1)
+	@oc label managedcluster $(CLUSTER) clusterGroup-
+	@echo "Done. Switch to spoke context and run: make offboard-spoke CLUSTER=$(CLUSTER)"
+
+.PHONY: offboard-spoke
+offboard-spoke: ## Step 2 of offboard — clean up spoke resources (run on spoke context): make offboard-spoke CLUSTER=<name>
+	@[ -n "$(CLUSTER)" ] || (echo "ERROR: CLUSTER is required. Usage: make offboard-spoke CLUSTER=<name>" && exit 1)
+	@echo "Offboarding spoke: $(CLUSTER)"
+	@echo "Pre-requisite: 'make unlabel-spoke CLUSTER=$(CLUSTER)' must have been run on hub context first."
 	@ansible-playbook ansible/playbooks/offboard-spoke.yaml \
 	  -e spoke_cluster_name=$(CLUSTER)
 

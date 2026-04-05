@@ -3,24 +3,26 @@
 #
 # Removes the Trilio GitOps Validated Pattern from a group-one spoke cluster.
 #
-# Usage (run from hub context — kubeconfig must reach the spoke):
-#   ansible-playbook ansible/playbooks/offboard-spoke.yaml \
-#     -e spoke_kubeconfig=/path/to/spoke-kubeconfig \
-#     -e spoke_cluster_name=dr-cluster
+# Usage (run on SPOKE context — after unlabeling from hub):
 #
-# Or via Makefile:
-#   make offboard-spoke CLUSTER=dr-cluster
+#   Step 1 (hub context):
+#     make unlabel-spoke CLUSTER=dr-cluster
+#     # or: oc label managedcluster dr-cluster clusterGroup-
+#
+#   Step 2 (spoke context):
+#     ansible-playbook ansible/playbooks/offboard-spoke.yaml \
+#       -e spoke_cluster_name=dr-cluster
+#     # or: make offboard-spoke CLUSTER=dr-cluster
 #
 # What this playbook does (in safe order):
-#   1. Remove ACM clusterGroup label — stops ACM re-pushing resources
-#   2. Patch Trilio CR finalizers — while operator is still running
-#   3. Delete Trilio OLM Subscription — graceful operator removal
-#   4. Wait for operator pods to terminate
-#   5. Delete CSV — confirms operator fully removed
-#   6. Delete ArgoCD child apps — triggers cascade resource deletion
-#   7. Patch orphaned ArgoCD Application finalizers if needed
-#   8. Delete remaining namespaces
-#   9. Delete Trilio CRDs
+#   1. Patch Trilio CR finalizers — while operator is still running
+#   2. Delete Trilio OLM Subscription — graceful operator removal
+#   3. Wait for operator pods to terminate
+#   4. Delete CSV — confirms operator fully removed
+#   5. Delete ArgoCD child apps — triggers cascade resource deletion
+#   6. Patch orphaned ArgoCD Application finalizers if needed
+#   7. Delete remaining namespaces
+#   8. Delete Trilio CRDs
 #
 # What is NOT removed:
 #   - ODF / openshift-storage (pre-req infrastructure, not pattern-owned)
@@ -64,31 +66,12 @@
   tasks:
 
     # -------------------------------------------------------------------------
-    # 1. Remove ACM clusterGroup label (hub context)
-    #    Must happen first — without this ACM re-pushes resources immediately
+    # Pre-requisite check: ACM label must have been removed before running this.
+    # Run on hub context first: make unlabel-spoke CLUSTER=<name>
     # -------------------------------------------------------------------------
-    - name: Remove clusterGroup label from ACM ManagedCluster
-      kubernetes.core.k8s:
-        api_version: cluster.open-cluster-management.io/v1
-        kind: ManagedCluster
-        name: "{{ spoke_cluster_name }}"
-        definition:
-          metadata:
-            labels:
-              clusterGroup: null
-        state: patched
-      vars:
-        ansible_python_interpreter: "{{ ansible_playbook_python }}"
-      environment:
-        KUBECONFIG: "{{ lookup('env', 'KUBECONFIG') }}"
-      delegate_to: localhost
-
-    - name: Wait 15 seconds for ACM to process label removal
-      ansible.builtin.pause:
-        seconds: 15
 
     # -------------------------------------------------------------------------
-    # 2. Patch Trilio CR finalizers — do this while operator is still running
+    # 1. Patch Trilio CR finalizers — do this while operator is still running
     #    so the operator has a chance to process its own cleanup logic first.
     #    Force-patch removes any that the operator did not self-remove.
     # -------------------------------------------------------------------------
@@ -115,7 +98,7 @@
       ignore_errors: true
 
     # -------------------------------------------------------------------------
-    # 3. Delete Trilio OLM Subscription — triggers graceful operator removal
+    # 2. Delete Trilio OLM Subscription — triggers graceful operator removal
     # -------------------------------------------------------------------------
     - name: Delete Trilio OLM Subscription
       kubernetes.core.k8s:
@@ -127,7 +110,7 @@
       ignore_errors: true
 
     # -------------------------------------------------------------------------
-    # 4. Wait for Trilio operator pods to terminate
+    # 3. Wait for Trilio operator pods to terminate
     # -------------------------------------------------------------------------
     - name: Wait for Trilio operator pods to terminate (up to 3 min)
       ansible.builtin.shell: |
@@ -141,7 +124,7 @@
       ignore_errors: true
 
     # -------------------------------------------------------------------------
-    # 5. Delete CSV
+    # 4. Delete CSV
     # -------------------------------------------------------------------------
     - name: Get Trilio CSV name
       ansible.builtin.shell: |
@@ -162,7 +145,7 @@
       ignore_errors: true
 
     # -------------------------------------------------------------------------
-    # 6. Delete ArgoCD child apps (cascade-deletes their managed resources)
+    # 5. Delete ArgoCD child apps (cascade-deletes their managed resources)
     # -------------------------------------------------------------------------
     - name: Delete ArgoCD child apps
       kubernetes.core.k8s:
@@ -186,7 +169,7 @@
       ignore_errors: true
 
     # -------------------------------------------------------------------------
-    # 7. Patch orphaned ArgoCD Application finalizers if namespace is stuck
+    # 6. Patch orphaned ArgoCD Application finalizers if namespace is stuck
     # -------------------------------------------------------------------------
     - name: Force-patch remaining Application finalizers (if any stuck)
       ansible.builtin.shell: |
@@ -207,7 +190,7 @@
       ignore_errors: true
 
     # -------------------------------------------------------------------------
-    # 8. Delete remaining pattern namespaces
+    # 7. Delete remaining pattern namespaces
     # -------------------------------------------------------------------------
     - name: Delete pattern namespaces
       kubernetes.core.k8s:
@@ -230,7 +213,7 @@
       ignore_errors: true
 
     # -------------------------------------------------------------------------
-    # 9. Delete Trilio CRDs (required for clean re-install)
+    # 8. Delete Trilio CRDs (required for clean re-install)
     # -------------------------------------------------------------------------
     - name: Get Trilio CRDs
       ansible.builtin.shell: |
