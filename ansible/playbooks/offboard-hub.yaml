@@ -22,6 +22,7 @@
 #  10.  Delete remaining pattern namespaces
 #  11.  Delete Trilio CRDs
 #  12.  Clean Trilio secrets from Vault (skipped if clean_vault=false)
+#  13.  Re-enable hub app-of-apps automated sync (leaves ArgoCD in normal state)
 #
 # IMPORTANT: Steps 3-4 (ArgoCD) MUST precede steps 5-7 (operator removal).
 # If ArgoCD is still active when the CSV is deleted, it fights the teardown:
@@ -354,6 +355,19 @@
         - clean_vault | bool
         - _vault_token.stdout | length > 0
       no_log: true
+      ignore_errors: true
+
+    # -------------------------------------------------------------------------
+    # 13. Re-enable hub app-of-apps automated sync
+    #     Restore ArgoCD to its normal operating state so that make install
+    #     works without any manual intervention. ArgoCD will show Trilio apps
+    #     as OutOfSync/Missing until make install recreates them — this is
+    #     expected and harmless.
+    # -------------------------------------------------------------------------
+    - name: Re-enable hub app-of-apps automated sync
+      ansible.builtin.shell: |
+        kubectl patch application.argoproj.io {{ hub_app_of_apps }} -n {{ gitops_namespace }} \
+          --type merge -p '{"spec":{"syncPolicy":{"automated":{}}}}' 2>/dev/null || true
       ignore_errors: true
 
     # -------------------------------------------------------------------------
