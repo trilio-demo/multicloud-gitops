@@ -63,8 +63,6 @@
       - wordpress
       - trilio-system
       - imperative
-      - config-demo
-      - hello-world
     # Set to false to skip Vault secret cleanup
     clean_vault: true
     # ACM label that identifies DR spoke clusters
@@ -365,7 +363,7 @@
       ansible.builtin.shell: |
         echo "=== Remaining pattern namespaces ==="
         kubectl get namespace 2>/dev/null | \
-          grep -E "trilio|wordpress|imperative" || echo "  none"
+          grep -E "trilio|wordpress|imperative" || echo "  none (clean)"
         echo "=== Remaining Trilio CRDs ==="
         kubectl get crd 2>/dev/null | grep trilio || echo "  none"
         echo "=== Remaining ArgoCD Applications (trilio/wordpress) ==="

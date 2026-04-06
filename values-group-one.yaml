@@ -2,8 +2,6 @@ clusterGroup:
   name: group-one
   # Namespace is a dictionary for easier overriding (lists are supported as well)
   namespaces:
-    config-demo:
-    hello-world:
     golang-external-secrets:
     trilio-system:
       operatorGroup: true
@@ -20,8 +18,6 @@ clusterGroup:
   # subscriptions:
   argoProjects:
     - eso
-    - config-demo
-    - hello-world
     - trilio-operand
     - wordpress-restore
   applications:
@@ -31,16 +27,6 @@ clusterGroup:
       argoProject: eso
       chart: golang-external-secrets
       chartVersion: 0.1.*
-    config-demo:
-      name: config-demo
-      namespace: config-demo
-      argoProject: config-demo
-      path: charts/all/config-demo
-    hello-world:
-      name: hello-world
-      namespace: hello-world
-      argoProject: hello-world
-      path: charts/all/hello-world
     # Req 10: trilio-secrets runs at wave -1 so ESO creates the S3 and license
     # Secrets before trilio-operand (wave 0) attempts to apply the BackupTarget.
     # The Trilio admission webhook rejects a Target CR if aws-s3-login is absent.
@@ -86,13 +72,6 @@ clusterGroup:
     # For additional overrides that apply to the jobs, please refer to
     # https://validatedpatterns.io/patterns/multicloud-gitops/mcg-imperative-actions/
     jobs:
-      - name: hello-world
-        # ansible playbook to be run
-        playbook: rhvp.cluster_utils.hello_world
-        # per playbook timeout in seconds
-        timeout: 234
-        # verbosity: "-v"
-
       # -----------------------------------------------------------------------
       # Req 12 — Spoke-side Continuous Restore validation
       # Checks that the CR pipeline has delivered ConsistentSets to this spoke.

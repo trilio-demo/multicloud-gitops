@@ -5,8 +5,6 @@ clusterGroup:
     open-cluster-management:
     vault:
     golang-external-secrets:
-    config-demo:
-    hello-world:
     trilio-system:
       operatorGroup: true
       targetNamespaces: []
@@ -26,8 +24,6 @@ clusterGroup:
       installPlanApproval: Automatic
   argoProjects:
     - hub
-    - config-demo
-    - hello-world
     - trilio-operand
     - wordpress
     - wordpress-restore
@@ -71,16 +67,6 @@ clusterGroup:
       argoProject: hub
       chart: golang-external-secrets
       chartVersion: 0.1.*
-    config-demo:
-      name: config-demo
-      namespace: config-demo
-      argoProject: config-demo
-      path: charts/all/config-demo
-    hello-world:
-      name: hello-world
-      namespace: hello-world
-      argoProject: hello-world
-      path: charts/all/hello-world
     # Req 10 (Option A): trilio-secrets at wave -1 ensures ESO creates S3 and
     # license Secrets before trilio-operand (wave 0) applies the BackupTarget.
     # Mirrors the spoke config. Brief delete/recreate of ExternalSecrets during
@@ -128,13 +114,6 @@ clusterGroup:
     # For additional overrides that apply to the jobs, please refer to
     # https://validatedpatterns.io/patterns/multicloud-gitops/mcg-imperative-actions/
     jobs:
-      - name: hello-world
-        # ansible playbook to be run
-        playbook: rhvp.cluster_utils.hello_world
-        # per playbook timeout in seconds
-        timeout: 234
-        # verbosity: "-v"
-
       # -----------------------------------------------------------------------
       # Req 12 — E2E DR lifecycle automation
       # Phase 1: Create a backup if none exists (runs every 10 min until done)
