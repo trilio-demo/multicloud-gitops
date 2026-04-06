@@ -105,8 +105,9 @@ Each item maps to a deliverable in the Implementation Matrix below.
 | 11 | Pattern documentation (`Document.md`) for publication on validatedpatterns.io — comprehensive usage manual for pattern adopters | P1 — Not Started |
 | 12 | Imperative Framework Automation: full E2E DR lifecycle driven by VP imperative jobs — backup on hub ready, enable Continuous Restore when DR cluster joins, restore + validate when ConsistentSet present, alert on success/failure | P0 — Done |
 | 13 | VP Uninstall: validate Pattern CR deletion teardown; document finalizer cleanup; confirm ODF is preserved; verify spoke disassociation from ACM | P2 — Done |
-| 14 | Remove multicloud-gitops upstream overhead (hello-world, config-demo, RHDP-specific workflows where appropriate); retain or comment items with future value; document every decision | P1 — Not Started |
-| 15 | Publish clean pattern to new public GitHub repo `trilio-continuous-restore`: update all metadata, RHDP workflow references, pattern name throughout; disconnect from multicloud-gitops lineage while preserving VP framework compatibility | P1 — Not Started |
+| 14 | Remove multicloud-gitops upstream overhead (hello-world, config-demo, RHDP-specific workflows where appropriate); retain or comment items with future value; document every decision | P1 — In Progress |
+| 15 | Rename pattern and cluster groups: `multicloud-gitops` → `trilio-continuous-restore`; `group-one` → `secondary`; `values-group-one.yaml` → `values-secondary.yaml`; update all references in values files, playbooks, Makefile, offboard scripts, tests, and metadata | P1 — Not Started |
+| 16 | Publish clean pattern to new public GitHub repo `trilio-continuous-restore`: push `dallas` branch as `main`; update repo URLs in metadata; confirm no lab-specific config or internal files in public repo | P1 — Not Started |
 
 ---
 
@@ -413,19 +414,55 @@ The latest Validated Patterns framework supports pattern uninstall via deletion 
 
 ---
 
-### Req 15 — Publish to New Public GitHub Repo: trilio-continuous-restore
+### Req 15 — Rename Pattern and Cluster Groups
+
+**Pre-requisites:** Req 14 (overhead removal) substantially complete.
+
+Rename all identifiers from multicloud-gitops/group-one origins to Trilio-specific names. Must happen in the working repo before Req 16 (publish).
+
+**Naming changes:**
+
+| Current | New | Where |
+|---------|-----|-------|
+| `global.pattern: multicloud-gitops` | `trilio-continuous-restore` | `values-global.yaml` |
+| `clusterGroup.name: group-one` | `secondary` | `values-group-one.yaml` → `values-secondary.yaml` |
+| `clusterGroup=group-one` label | `clusterGroup=secondary` | ACM ManagedCluster, Makefile, playbooks |
+| `values-group-one.yaml` | `values-secondary.yaml` | file rename |
+| `values-4.20-group-one.yaml` | `values-4.20-secondary.yaml` | file rename |
+| `values-4.21-group-one.yaml` | `values-4.21-secondary.yaml` | file rename |
+| `PATTERN_NAME="MultiCloudGitops"` | `"TrilioContRestore"` | `tests/interop/run_tests.sh` |
+| `PATTERN_SHORTNAME="mcgitops"` | `"tcr"` | `tests/interop/run_tests.sh` |
+| `multicloud-gitops-hub` ArgoCD project | `trilio-continuous-restore-hub` | `tests/interop/test_validate_hub_site_components.py` |
+
+**Files requiring updates:**
+- `values-global.yaml`
+- `values-group-one.yaml` → rename + update `clusterGroup.name`
+- `values-4.20-group-one.yaml`, `values-4.21-group-one.yaml` → rename
+- `Makefile` — all `group-one` label references
+- `ansible/playbooks/offboard-hub.yaml` — `spoke_cluster_group_label`, child app namespace
+- `ansible/playbooks/offboard-spoke.yaml` — `app_of_apps_name`, `spoke_argocd_namespace`
+- All `imperative-*.yaml` playbooks — any group-one refs
+- `pattern-metadata.yaml` — name, display_name, owners, URLs
+- `tests/interop/run_tests.sh`
+- `tests/interop/test_validate_hub_site_components.py`
+- GitHub workflows — pattern name references
+
+**Note on ArgoCD namespace naming:** The VP framework constructs ArgoCD namespace names as `<gitBranch>-<pattern>-<clusterGroup>`. On the `dallas` branch this produces `dallas-trilio-continuous-restore-hub` and `dallas-trilio-continuous-restore-secondary`. Once published on `main` it will be `main-trilio-continuous-restore-hub` and `main-trilio-continuous-restore-secondary`. Validate on a clean install after the rename is applied.
+
+---
+
+### Req 16 — Publish to New Public GitHub Repo: trilio-continuous-restore
+
+**Pre-requisites:** Req 14 and Req 15 complete.
 
 Create a clean, publicly accessible GitHub repository named **`trilio-continuous-restore`** for the Trilio GitOps Validated Pattern. This repo is the artifact delivered to Red Hat and Trilio for community and customer use.
-
-**Pre-requisites:** Req 14 (overhead removal) complete.
 
 **Scope:**
 - New repo name: `trilio-continuous-restore`
 - Org: TBD — either `validatedpatterns` if adopted by the RH VP team, or `trilio-demo` / partner org for interim publication
-- All content from `dallas` branch of this working repo, after Req 14 cleanup, forms the `main` branch of the new public repo
-- No internal working files, scratch notes, or lab-specific configuration visible in the new repo
+- `dallas` branch of this working repo → `main` branch of new public repo
 
-**Files to exclude from public repo (confirm these are already in .gitignore):**
+**Files to exclude from public repo (confirm in .gitignore):**
 - `Team.md`
 - Any `values-secret.yaml` variants
 - `CLAUDE.md` (internal AI contributor instructions — decision: include or exclude?)
@@ -434,20 +471,7 @@ Create a clean, publicly accessible GitHub repository named **`trilio-continuous
 **RHDP Workflow decision point:**
 The `sync-rhdp-branch.yml` workflow has an org guard: `if: github.repository_owner == 'validatedpatterns'`. If the new public repo is under a different org, this workflow will silently no-op. Options:
 1. Update the org guard to match the new repo owner
-2. Remove the guard and rely on the `DOCS_TOKEN` secret being absent to prevent unintended triggers
-3. Coordinate with RH VP team to host under `validatedpatterns` org from day one
-
-**pattern-metadata.yaml must be fully updated before push:**
-- `name: trilio-continuous-restore`
-- `display_name: Trilio Continuous Restore`
-- `repo_url`: new public repo URL
-- `issues_url`: new public repo issues URL
-- `docs_url`: TBD (validatedpatterns.io page once published)
-- `ci_url`: TBD
-- `owners`: update to reflect Trilio + RH contacts
-
-**values-global.yaml:**
-- `global.pattern: trilio-continuous-restore`
+2. Coordinate with RH VP team to host under `validatedpatterns` org from day one
 
 **Post-publication:**
 - Create a PR from `main` in new public repo to register in the VP patterns index
