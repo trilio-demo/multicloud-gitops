@@ -77,37 +77,63 @@ graph TD
 - Advanced Cluster Management (ACM) installed on hub
 - HashiCorp Vault accessible from the cluster
 - External Secrets Operator deployed
-- Trilio license key stored in Vault at `secret/global/trilio-license` with property `key`
+- Validated Patterns operator installed on the hub cluster
 
 ## Deployment
 
-### 1. Clone and configure secrets
+There are two supported approaches. Both result in the same running pattern — the difference is only in how secrets are loaded into Vault.
+
+### Option A — VP Operator + manual Vault secrets (recommended)
+
+The VP operator on the hub cluster watches the Git repo and reconciles the pattern automatically.
+
+**1. Add this repo to the VP operator**
+
+In the OpenShift console, navigate to the Validated Patterns operator and create a Pattern CR pointing at this repository.
+
+**2. Write secrets to Vault**
 
 ```bash
-git clone <this-repo>
+# Write Trilio license key (must be a single unbroken line — no backslashes)
+oc exec -n vault vault-0 -- env VAULT_TOKEN=$VAULT_TOKEN \
+  vault kv put secret/global/trilio-license key="<your-license-key>"
+
+# Write S3 credentials
+oc exec -n vault vault-0 -- env VAULT_TOKEN=$VAULT_TOKEN \
+  vault kv put secret/global/trilio-s3 \
+  accessKey="<access-key>" secretKey="<secret-key>"
+```
+
+ArgoCD takes over from there — installs the Trilio operator, deploys the TVM operand, and creates the License CR.
+
+---
+
+### Option B — make install (Ansible-driven)
+
+Requires the `rhvp.cluster_utils` Ansible collection. Two ways to get it:
+
+- **Local install** (currently pre-release on Galaxy):
+  ```bash
+  ansible-galaxy collection install rhvp.cluster_utils --pre
+  ```
+- **VP utility container** (requires `podman`, collection pre-installed):
+  ```bash
+  ./pattern.sh make install
+  ```
+
+Populate `values-secret.yaml` from the template:
+
+```bash
 cp values-secret.yaml.template values-secret.yaml
-# Edit values-secret.yaml and populate your Vault token / license key
+# Fill in trilio-license key, S3 accessKey and secretKey
+make install        # or: ./pattern.sh make install
 ```
 
-### 2. Store the license in Vault
+`make install` writes secrets to Vault and registers the ValidatedPattern CR. ArgoCD takes over from there.
 
-```bash
-vault kv put secret/global/trilio-license key="<your-trilio-license-key>"
-```
+---
 
-### 3. Deploy the pattern
-
-```bash
-./pattern.sh make install
-```
-
-ArgoCD will:
-1. Install the Trilio operator via OLM Subscription
-2. Deploy the TrilioVaultManager CR
-3. Sync the ExternalSecret → Secret from Vault
-4. Run the License Job to create the License CR
-
-### 4. Validate
+### 3. Validate
 
 ```bash
 # Check Trilio operator

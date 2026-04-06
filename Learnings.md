@@ -1,5 +1,27 @@
 # Learnings and Key Insights
 
+## Trilio Status Writes Cause Perpetual ArgoCD OutOfSync
+
+**Problem:** Trilio writes extensively to `.status` on its CRs (Target, TrilioVaultManager, etc.) after creation. ArgoCD detects these status fields as drift from the Helm chart (which defines no status), and reports the resource as `OutOfSync` indefinitely — even though the spec is correct and the resource is healthy.
+
+**Why it's serious:** ArgoCD with automated sync will repeatedly attempt to reconcile the resource, and any human looking at the dashboard sees a permanently red app. This can mask real sync problems.
+
+**Wrong fixes:**
+- Manually editing `argocd-cm` — ArgoCD reconciles it back within minutes
+- Patching the Application CR directly — the hub app-of-apps reconciles it back
+
+**Correct fix:** Add the `ServerSideDiff` compare option annotation to the Trilio CR template in the Helm chart. This tells ArgoCD to use server-side diff, which only compares fields ArgoCD manages (via `managedFields`), ignoring everything Trilio writes post-creation:
+
+```yaml
+metadata:
+  annotations:
+    argocd.argoproj.io/compare-options: "ServerSideDiff=true"
+```
+
+This is already applied to `backup-target.yaml`. Apply the same annotation to any other Trilio CR that shows persistent OutOfSync.
+
+**Alternative (global):** Add a `resourceCustomizations` entry to the `ArgoCD` CR spec (not `argocd-cm`) for each Trilio CRD. But this is harder to manage in a VP GitOps context since the ArgoCD CR is also reconciled.
+
 ## OLM vs. Helm for Operator and Operand Management
 - **OLM (Operator Lifecycle Manager)** is the OpenShift-recommended way to install and manage operators. It provides lifecycle, upgrade, and security management for operators.
 - **Helm** is best used for deploying operands (the custom resources managed by operators) and other application resources, not for installing operators themselves on OpenShift.

@@ -9,6 +9,10 @@ metadata:
     # On the DR cluster, the EventTarget pod polls for new backups and
     # pre-stages PVCs locally for accelerated RTO (Continuous Restore).
     trilio.io/event-target: "true"
+    # Tell ArgoCD to use server-side diff for this resource so it only compares
+    # fields ArgoCD manages. Without this, Trilio's status writes cause the
+    # Target to show perpetually OutOfSync even though spec is correct.
+    argocd.argoproj.io/compare-options: "ServerSideDiff=true"
 spec:
   enableBrowsing: {{ .Values.backupTarget.enableBrowsing }}
   type: ObjectStore
