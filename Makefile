@@ -64,6 +64,13 @@ offboard-spoke: ## Step 2 of offboard — clean up spoke resources (run on spoke
 	@ansible-playbook ansible/playbooks/offboard-spoke.yaml \
 	  -e spoke_cluster_name=$(CLUSTER)
 
+.PHONY: offboard-hub
+offboard-hub: ## Tear down the Trilio pattern from the hub cluster (run on hub context)
+	@echo "Offboarding hub — this will remove all Trilio pattern resources."
+	@echo "ACM, Vault, ESO, and OpenShift GitOps are NOT removed."
+	@read -p "Continue? [y/N] " ans && [ "$$ans" = "y" ] || exit 0
+	@ansible-playbook ansible/playbooks/offboard-hub.yaml
+
 .PHONY: dr-status
 dr-status: ## Show hub-side E2E DR status ConfigMap
 	@oc get configmap trilio-dr-status -n imperative -o yaml 2>/dev/null || \

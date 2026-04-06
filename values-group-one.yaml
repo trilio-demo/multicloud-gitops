@@ -15,7 +15,7 @@ clusterGroup:
       namespace: trilio-system
       channel: 5.3.x
       source: certified-operators
-      installPlanApproval: Manual
+      installPlanApproval: Automatic
   # The only subscription on spokes is gitops which gets managed by ACM
   # subscriptions:
   argoProjects:

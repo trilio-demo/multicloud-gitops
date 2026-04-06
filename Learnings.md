@@ -5,6 +5,36 @@
 - **Helm** is best used for deploying operands (the custom resources managed by operators) and other application resources, not for installing operators themselves on OpenShift.
 - **Validated Patterns Best Practice:** Use OLM for operator installation and Helm for operand/application management. This approach aligns with both OpenShift and Validated Pattern methodologies, ensuring GitOps compliance and supportability.
 
+## OLM Object Model: Subscription vs CSV vs Operator Pods
+
+These three objects are often confused. They are distinct and deleting one does **not** cascade to the others:
+
+```
+Subscription  →  InstallPlan  →  CSV (ClusterServiceVersion)  →  Operator pods
+   (watches)       (applies)       (owns)                          (runs)
+```
+
+| Object | What it is | Effect of deleting |
+|--------|-----------|-------------------|
+| **Subscription** | Tells OLM to watch a channel and keep the operator installed | Removes the watch only — operator keeps running |
+| **InstallPlan** | One-time record of what was applied | Safe to ignore during teardown |
+| **CSV** | The installed operator itself; owns the Deployments | Deleting this stops the operator pods |
+
+**To fully remove an operator:** delete both the Subscription and the CSV. Deleting only the Subscription leaves the operator running indefinitely.
+
+## Trilio CR Finalizers Must Be Removed Before Deleting the CSV
+
+Trilio CRs (BackupPlan, Backup, Target, Restore, etc.) have **finalizers**. The operator processes these on deletion — running cleanup logic against S3, releasing locks — then removes the finalizer, allowing the object to be garbage collected.
+
+**If you delete the CSV before clearing finalizers:** the operator pods die, nothing processes the finalizers, and all Trilio CRs get stuck in `Terminating` forever.
+
+**Correct teardown order:**
+1. Patch finalizers off all Trilio CRs (`--type json -p '[{"op":"remove","path":"/metadata/finalizers"}]'`)
+2. Delete Subscription
+3. Delete CSV → operator pods terminate cleanly
+
+The actual backup data in S3 is unaffected — deleting Trilio CR objects on the cluster does not touch the S3 bucket contents.
+
 ## General Pattern Development
 - All resources should be managed declaratively and stored in Git.
 - ArgoCD is recommended for GitOps-driven continuous delivery.

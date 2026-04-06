@@ -23,7 +23,7 @@ clusterGroup:
       namespace: trilio-system
       channel: 5.3.x
       source: certified-operators
-      installPlanApproval: Manual
+      installPlanApproval: Automatic
   argoProjects:
     - hub
     - config-demo

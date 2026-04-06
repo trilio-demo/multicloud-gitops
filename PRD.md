@@ -104,7 +104,7 @@ Each item maps to a deliverable in the Implementation Matrix below.
 | 10 | Spoke onboarding: resolve OLM/ArgoCD race condition so trilio-operand self-heals without manual sync | P1 — Done |
 | 11 | Pattern documentation (`Document.md`) for publication on validatedpatterns.io — comprehensive usage manual for pattern adopters | P1 — Not Started |
 | 12 | Imperative Framework Automation: full E2E DR lifecycle driven by VP imperative jobs — backup on hub ready, enable Continuous Restore when DR cluster joins, restore + validate when ConsistentSet present, alert on success/failure | P0 — Done |
-| 13 | VP Uninstall: validate Pattern CR deletion teardown; document finalizer cleanup; confirm ODF is preserved; verify spoke disassociation from ACM | P2 — In Progress |
+| 13 | VP Uninstall: validate Pattern CR deletion teardown; document finalizer cleanup; confirm ODF is preserved; verify spoke disassociation from ACM | P2 — Done |
 | 14 | Remove multicloud-gitops upstream overhead (hello-world, config-demo, RHDP-specific workflows where appropriate); retain or comment items with future value; document every decision | P1 — Not Started |
 | 15 | Publish clean pattern to new public GitHub repo `trilio-continuous-restore`: update all metadata, RHDP workflow references, pattern name throughout; disconnect from multicloud-gitops lineage while preserving VP framework compatibility | P1 — Not Started |
 
@@ -384,7 +384,7 @@ The latest Validated Patterns framework supports pattern uninstall via deletion 
 
 **Out of scope:** ODF removal, OpenShift upgrade, or cluster decommission.
 
-**Status (2026-04-05 — In Progress):**
+**Status (2026-04-05 — Done):**
 
 *Spoke offboard — Validated (2026-04-05):*
 - `offboard-spoke.yaml` playbook validated end-to-end against a live spoke cluster
@@ -396,10 +396,20 @@ The latest Validated Patterns framework supports pattern uninstall via deletion 
   - App-of-apps has ArgoCD cascade-delete finalizer that gets stuck when child namespace is already gone — patch it before deleting
   - `dallas-multicloudops-group-one` ArgoCD instance namespace must be in the cleanup list
 
-*Hub offboard:*
-- No playbook created yet; manual steps not yet documented or tested
-- Hub teardown is different: involves Pattern CR deletion (VP framework) rather than the spoke's label-removal + ArgoCD cascade approach
-- **Planned:** document and test hub manual teardown 2026-04-06, then automate
+*Hub offboard — Validated (2026-04-05):*
+- `offboard-hub.yaml` playbook created and validated end-to-end against a live hub cluster
+- Run via: `make offboard-hub` (prompts for confirmation) or `ansible-playbook ansible/playbooks/offboard-hub.yaml`
+- Pre-flight check aborts if any spoke still has `clusterGroup=group-one` label — spoke must be offboarded first
+- Critical ordering lessons learned during manual validation:
+  - **ArgoCD sync must be disabled and child apps deleted BEFORE deleting the CSV** — if ArgoCD is active when the operator is removed, it fights the teardown: reconciles TVM against a dead operator, causing component pods to error and re-created CRs to get stuck `Terminating`
+  - **Deleting the Subscription alone does NOT stop operator pods** — only CSV deletion stops them
+  - **Vault root token must be read from `imperative` namespace BEFORE namespace deletion** — token is in `vaultkeys` Secret which is deleted with the namespace
+  - **ArgoCD cascade-delete can stall on ExternalSecret finalizers** — force-patch Application finalizers to unblock
+  - Hub child apps live in namespace `dallas-multicloudops-hub` (not `openshift-gitops`) — same pattern as spoke
+  - Only delete Trilio/WordPress child apps — `acm`, `vault`, `golang-external-secrets` are hub infrastructure
+  - ManagedCluster must be deleted (not just unlabeled) to fully detach spoke from ACM inventory
+- ACM, Vault, ESO, and OpenShift GitOps are intentionally preserved (hub infrastructure, not pattern-owned)
+- ODF on spokes is preserved (not pattern-owned)
 
 ---
 
@@ -607,7 +617,7 @@ All pattern bootstrap and operational tooling runs inside the **Red Hat Validate
 | Trilio 5.3.x native license-via-Secret (Req 9) | Add 5.3.x License Secret ref to TVM spec; bump OLM channel to 5.3.x; retain Job for 5.2.x backwards compatibility | Upgrade validates automatically; License CR converts; no manual steps | In Progress (manifests in hand) |
 | Pattern documentation for validatedpatterns.io (Req 11) | `Document.md` in repo root — usage manual for pattern adopters covering architecture, deployment, operations, and troubleshooting | Document pulled by RH VP team; published on validatedpatterns.io | Not Started |
 | Imperative Framework Automation — E2E DR lifecycle (Req 12) | 7 imperative playbooks wired into `values-hub.yaml` `imperative.jobs`; 4-phase pipeline: validate → backup → enable CR → wait CS → restore → validate restore → alert | Full E2E DR cycle completes automatically after clusters up; PASS/FAIL alert emitted | Not Started |
-| VP Uninstall teardown validation (Req 13) | Delete Pattern CR; document finalizer cleanup; confirm ODF preserved; confirm spoke disassociation | Hub clean (no VP namespaces/Trilio/ArgoCD apps); spoke standalone and functional; ODF intact | In Progress — spoke manual runbook validated; offboard-spoke.yaml playbook created (not yet run); hub offboard not started |
+| VP Uninstall teardown validation (Req 13) | Delete Pattern CR; document finalizer cleanup; confirm ODF preserved; confirm spoke disassociation | Hub clean (no VP namespaces/Trilio/ArgoCD apps); spoke standalone and functional; ODF intact | Done — spoke: offboard-spoke.yaml validated 2026-04-05; hub: offboard-hub.yaml validated 2026-04-05 |
 
 > Update this table as new requirements are implemented and validated.
 
