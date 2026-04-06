@@ -11,7 +11,7 @@ docs_url: https://validatedpatterns.io/patterns/multicloud-gitops/
 ci_url: https://validatedpatterns.io/ci/?pattern=mcgitops
 # can be sandbox, tested or maintained
 tier: maintained
-owners: mbaldessari, darkdoc
+owners: vebutton
 requirements:
   hub: # Main cluster
     compute:
