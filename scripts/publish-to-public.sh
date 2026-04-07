@@ -14,7 +14,7 @@
 #   git init -b main
 #   git add -A
 #   git commit -m "Initial release of Trilio Continuous Restore Validated Pattern"
-#   git remote add origin <new-repo-url>
+#   git remote add origin https://github.com/trilio-demo/trilio-continuous-restore
 #   git push -u origin main
 #
 # Safe to re-run — target directory is wiped and rebuilt each time.
@@ -223,5 +223,5 @@ echo "  cd $TARGET_DIR"
 echo "  git init -b main"
 echo "  git add -A"
 echo "  git commit -m 'Initial release of Trilio Continuous Restore Validated Pattern'"
-echo "  git remote add origin <new-repo-url>"
+echo "  git remote add origin https://github.com/trilio-demo/trilio-continuous-restore"
 echo "  git push -u origin main"
