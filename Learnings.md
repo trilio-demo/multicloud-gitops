@@ -1,5 +1,22 @@
 # Learnings and Key Insights
 
+## Imperative Playbook Update Lag — Expect 10-30+ Minute Delay After a Git Push
+
+When a playbook bug is fixed and pushed to Git, there are three sequential delays before the fix takes effect:
+
+1. **ArgoCD sync** — ArgoCD polls Git every ~3 minutes (default). The ConfigMap containing the playbook is not updated until ArgoCD completes a sync cycle.
+2. **CronJob schedule** — The imperative CronJob runs every 10 minutes (`*/10 * * * *`). A new job only starts at the next scheduled tick after the ConfigMap is updated.
+3. **Job pod startup** — The pod must pull the image and mount the updated ConfigMap before the playbook runs.
+
+**Total lag:** typically 15-30 minutes from `git push` to seeing the fix in the logs. In the worst case (push just after a sync and just after a job tick), it can be 20+ minutes.
+
+**How to confirm the fix is live:** check the task name in the logs. If the task name changed in the fix, seeing the new name confirms the updated playbook is running. Alternatively check the ArgoCD app revision matches the expected commit SHA before waiting for the job.
+
+**Workaround for urgent fixes:** manually create a Job from the CronJob after ArgoCD syncs:
+```bash
+oc create job --from=cronjob/imperative-cronjob manual-fix-test -n imperative
+```
+
 ## Backup CR `spec.type` Required in 5.3.x (Was Silently Ignored in 5.2.x)
 
 The Backup CR has always required `spec.type` (values: `Full` or `Incremental`), but Trilio 5.2.x accepted the CR without it. 5.3.x enforces the field and returns a `422 Unprocessable Entity` if missing.
