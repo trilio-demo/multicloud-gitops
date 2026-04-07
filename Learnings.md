@@ -1,5 +1,13 @@
 # Learnings and Key Insights
 
+## Backup CR `spec.type` Required in 5.3.x (Was Silently Ignored in 5.2.x)
+
+The Backup CR has always required `spec.type` (values: `Full` or `Incremental`), but Trilio 5.2.x accepted the CR without it. 5.3.x enforces the field and returns a `422 Unprocessable Entity` if missing.
+
+`spec.backupType` is a separate field for snapshot type — it is not an alias for `spec.type`. Do not use `backupType` in place of `type`.
+
+**Fix:** Ensure all Backup CR definitions include `spec.type: Full` (or `Incremental`). The imperative backup playbook (`ansible/playbooks/imperative-backup.yaml`) was updated to use `type` instead of `backupType`.
+
 ## Trilio Status Writes Cause Perpetual ArgoCD OutOfSync
 
 **Problem:** Trilio writes extensively to `.status` on its CRs (Target, TrilioVaultManager, etc.) after creation. ArgoCD detects these status fields as drift from the Helm chart (which defines no status), and reports the resource as `OutOfSync` indefinitely — even though the spec is correct and the resource is healthy.
