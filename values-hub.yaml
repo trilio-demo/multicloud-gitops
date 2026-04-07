@@ -152,10 +152,10 @@ clusterGroup:
         timeout: 120
   managedClusterGroups:
     exampleRegion:
-      name: group-one
+      name: secondary
       acmlabels:
         - name: clusterGroup
-          value: group-one
+          value: secondary
       # helmOverrides:
       #   - name: foo
       #     value: bar

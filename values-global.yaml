@@ -1,6 +1,6 @@
 ---
 global:
-  pattern: multicloud-gitops
+  pattern: trilio-continuous-restore
   options:
     useCSV: false
     syncPolicy: Automatic

@@ -18,7 +18,7 @@
 #              (proves the EventTarget pipeline is live and data is flowing)
 #
 # Spoke-side validation (ConsistentSet check) runs independently on each
-# group-one spoke via imperative-cr-status.yaml.
+# secondary spoke via imperative-cr-status.yaml.
 #
 # Overall result: PASS only when all four hub phases are complete.
 # The playbook fails (non-zero exit) when overall result is FAIL, which causes

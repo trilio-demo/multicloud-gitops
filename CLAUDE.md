@@ -8,7 +8,7 @@ Red Hat Validated Pattern for Disaster Recovery with Trilio on OpenShift.
 
 ## Key Architecture
 - **Hub cluster:** ACM + Vault + ESO + ArgoCD + Trilio operator (OLM) + operand (Helm)
-- **Spoke (group-one):** ESO + Trilio operator (OLM); trilio-operand chart is hub-only
+- **Spoke (secondary):** ESO + Trilio operator (OLM); trilio-operand chart is hub-only
 - **Rule:** OLM installs operators; Helm manages operands (CRs). Never use Helm to install operators on OpenShift.
 - **Secrets:** Never in Git. `values-secret.yaml` → Vault (via `make install`) → ESO → Kubernetes Secrets
 
@@ -18,7 +18,7 @@ Red Hat Validated Pattern for Disaster Recovery with Trilio on OpenShift.
 | Trilio operand Helm chart | `charts/all/trilio-operand/` |
 | WordPress sample app chart | `charts/all/wordpress/` |
 | Hub values | `values-hub.yaml` |
-| Spoke values | `values-group-one.yaml` |
+| Spoke values | `values-secondary.yaml` |
 | Ansible validation playbook | `ansible/playbooks/validate-trilio.yaml` |
 | Ansible DR backup playbook | `ansible/playbooks/dr-backup.yaml` |
 | Ansible DR restore playbook | `ansible/playbooks/dr-restore.yaml` |

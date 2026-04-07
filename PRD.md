@@ -106,7 +106,7 @@ Each item maps to a deliverable in the Implementation Matrix below.
 | 12 | Imperative Framework Automation: full E2E DR lifecycle driven by VP imperative jobs — backup on hub ready, enable Continuous Restore when DR cluster joins, restore + validate when ConsistentSet present, alert on success/failure | P0 — Done |
 | 13 | VP Uninstall: validate Pattern CR deletion teardown; document finalizer cleanup; confirm ODF is preserved; verify spoke disassociation from ACM | P2 — Done |
 | 14 | Remove multicloud-gitops upstream overhead (hello-world, config-demo, RHDP-specific workflows where appropriate); retain or comment items with future value; document every decision | P1 — Done |
-| 15 | Rename pattern and cluster groups: `multicloud-gitops` → `trilio-continuous-restore`; `group-one` → `secondary`; `values-group-one.yaml` → `values-secondary.yaml`; update all references in values files, playbooks, Makefile, offboard scripts, tests, and metadata | P1 — Not Started |
+| 15 | Rename pattern and cluster groups: `multicloud-gitops` → `trilio-continuous-restore`; `group-one` → `secondary`; `values-group-one.yaml` → `values-secondary.yaml`; update all references in values files, playbooks, Makefile, offboard scripts, tests, and metadata | P1 — Done |
 | 16 | Publish clean pattern to new public GitHub repo `trilio-continuous-restore`: push `dallas` branch as `main`; update repo URLs in metadata; confirm no lab-specific config or internal files in public repo | P1 — Not Started |
 
 ---

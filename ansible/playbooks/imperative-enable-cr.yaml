@@ -2,7 +2,7 @@
 # imperative-enable-cr.yaml
 #
 # Imperative framework job — Phase 3: enable Continuous Restore for all
-# group-one DR clusters that have Trilio up and registered with the hub Target.
+# secondary DR clusters that have Trilio up and registered with the hub Target.
 #
 # Runs on a schedule (default every 10 minutes) via the Validated Patterns
 # imperative framework.  Idempotent: skips clusters that already have a CR
@@ -10,7 +10,7 @@
 # the Target status (not ready — will retry next cycle).
 #
 # DR cluster discovery:
-#   Queries ACM ManagedClusters with label clusterGroup=group-one.
+#   Queries ACM ManagedClusters with label clusterGroup=secondary.
 #   Each cluster's infrastructure name is used as the spoke_cluster_name to
 #   look up in the Target CR's availableContinuousRestoreInstances.
 #
@@ -21,7 +21,7 @@
 #   4. Creates CR-enabled BackupPlan (Ansible-owned, no ArgoCD tracking)
 #   5. Waits for BackupPlan to reach Available
 
-- name: "Imperative Phase 3 — Enable Continuous Restore for group-one DR clusters"
+- name: "Imperative Phase 3 — Enable Continuous Restore for secondary DR clusters"
   hosts: localhost
   connection: local
   gather_facts: false
@@ -83,7 +83,7 @@
         (_existing_bp.resources[0].status.status | default('')) == 'Available'
 
     # -------------------------------------------------------------------------
-    # 3. Discover group-one DR clusters from ACM
+    # 3. Discover secondary DR clusters from ACM
     # -------------------------------------------------------------------------
     - name: List ACM ManagedClusters
       kubernetes.core.k8s_info:
@@ -91,22 +91,22 @@
         kind: ManagedCluster
       register: _managed_clusters
 
-    - name: Filter for group-one clusters (excluding local-cluster)
+    - name: Filter for secondary clusters (excluding local-cluster)
       ansible.builtin.set_fact:
         _dr_clusters: >-
           {{ _managed_clusters.resources
              | selectattr('metadata.labels.clusterGroup', 'defined')
-             | selectattr('metadata.labels.clusterGroup', 'equalto', 'group-one')
+             | selectattr('metadata.labels.clusterGroup', 'equalto', 'secondary')
              | rejectattr('metadata.name', 'equalto', 'local-cluster')
              | list }}
 
-    - name: Skip if no group-one clusters found yet
+    - name: Skip if no secondary clusters found yet
       ansible.builtin.meta: end_play
       when: _dr_clusters | length == 0
 
     - name: Show discovered DR clusters
       ansible.builtin.debug:
-        msg: "Found {{ _dr_clusters | length }} group-one DR cluster(s): {{ _dr_clusters | map(attribute='metadata.name') | list }}"
+        msg: "Found {{ _dr_clusters | length }} secondary DR cluster(s): {{ _dr_clusters | map(attribute='metadata.name') | list }}"
 
     # -------------------------------------------------------------------------
     # 4. Get hub Target CR — must be Available and have CR instances registered
@@ -136,7 +136,7 @@
     #    NOT the ACM ManagedCluster import name. Extract the OCP cluster name
     #    from the apiserverurl.openshift.io claim (first label after "api.").
     # -------------------------------------------------------------------------
-    - name: Build list of OCP cluster names from group-one ACM clusters
+    - name: Build list of OCP cluster names from secondary ACM clusters
       ansible.builtin.set_fact:
         _dr_cluster_ocp_names: >-
           {{ _dr_clusters

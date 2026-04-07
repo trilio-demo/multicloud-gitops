@@ -1,5 +1,5 @@
 clusterGroup:
-  name: group-one
+  name: secondary
   # Namespace is a dictionary for easier overriding (lists are supported as well)
   namespaces:
     golang-external-secrets:

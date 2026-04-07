@@ -1,7 +1,7 @@
 ---
 # offboard-spoke.yaml
 #
-# Removes the Trilio GitOps Validated Pattern from a group-one spoke cluster.
+# Removes the Trilio GitOps Validated Pattern from a secondary spoke cluster.
 #
 # Usage (run on SPOKE context — after unlabeling from hub):
 #
@@ -43,13 +43,10 @@
     spoke_cluster_name: "{{ spoke_cluster_name | mandatory }}"
     trilio_namespace: trilio-system
     trilio_csv_prefix: "k8s-triliovault-stable"
-    app_of_apps_name: "dallas-multicloudops-group-one"
-    spoke_argocd_namespace: "dallas-multicloudops-group-one"
+    app_of_apps_name: "main-trilio-continuous-restore-secondary"
+    spoke_argocd_namespace: "main-trilio-continuous-restore-secondary"
     hub_gitops_namespace: "openshift-gitops"
     child_apps:
-      - config-demo
-      - golang-external-secrets
-      - hello-world
       - trilio-operand
       - trilio-secrets
       - wordpress-restore
@@ -57,10 +54,7 @@
       - trilio-system
       - wordpress-restore
       - imperative
-      - golang-external-secrets
-      - config-demo
-      - hello-world
-      - dallas-multicloudops-group-one
+      - main-trilio-continuous-restore-secondary
 
   tasks:
 
@@ -272,7 +266,7 @@
       ansible.builtin.shell: |
         echo "=== Remaining pattern namespaces ==="
         kubectl get namespace 2>/dev/null | \
-          grep -E "trilio|wordpress-restore|imperative|dallas-multi" || echo "  none"
+          grep -E "trilio|wordpress-restore|imperative|main-trilio" || echo "  none"
         echo "=== Remaining Trilio CRDs ==="
         kubectl get crd 2>/dev/null | grep trilio || echo "  none"
         echo "=== Remaining ArgoCD Applications ==="

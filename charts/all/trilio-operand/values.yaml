@@ -12,7 +12,7 @@ trilio:
 # BackupTarget: S3-compatible object store for Trilio backups.
 # Credentials (accessKey, secretKey) are pulled from Vault via ESO:
 #   secret/global/trilio-s3  { accessKey: "...", secretKey: "..." }
-# Override bucketName and region in values-hub.yaml / values-group-one.yaml
+# Override bucketName and region in values-hub.yaml / values-secondary.yaml
 # or via helmOverrides in the application entry.
 backupTarget:
   bucketName: ""

@@ -23,12 +23,12 @@ onboard-spoke: ## Onboard a DR spoke cluster: make onboard-spoke CLUSTER=<manage
 	@echo "Onboarding spoke cluster: $(CLUSTER)"
 	@oc get managedcluster $(CLUSTER) > /dev/null 2>&1 || \
 	  (echo "ERROR: ManagedCluster '$(CLUSTER)' not found. Import it into ACM first." && exit 1)
-	@oc label managedcluster $(CLUSTER) clusterGroup=group-one --overwrite
+	@oc label managedcluster $(CLUSTER) clusterGroup=secondary --overwrite
 	@echo "Label applied. ACM will now provision the full Trilio DR stack (~15-25 min)."
 	@echo ""
 	@echo "ACTION REQUIRED: The spoke app-of-apps has no automated sync."
 	@echo "Switch to the SPOKE cluster context and run:"
-	@echo "  oc patch application.argoproj.io dallas-multicloudops-group-one -n openshift-gitops \\"
+	@echo "  oc patch application.argoproj.io main-trilio-continuous-restore-secondary -n openshift-gitops \\"
 	@echo "    --type merge -p '{\"operation\":{\"sync\":{}}}'"
 	@echo ""
 	@echo "Monitor with: make spoke-status CLUSTER=$(CLUSTER)"

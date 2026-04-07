@@ -1,14 +1,14 @@
 # This goal of this metadata is mainly used as a source of truth for
 # documentation and qe
 metadata_version: "1.0"
-name: multicloud-gitops
+name: trilio-continuous-restore
 pattern_version: "1.0"
-display_name: Multicloud Gitops
-repo_url: https://github.com/validatedpatterns/multicloud-gitops
+display_name: Trilio Continuous Restore
+repo_url: https://github.com/trilio-demo/trilio-continuous-restore
 docs_repo_url: https://github.com/validatedpatterns/docs
-issues_url: https://github.com/validatedpatterns/multicloud-gitops/issues
-docs_url: https://validatedpatterns.io/patterns/multicloud-gitops/
-ci_url: https://validatedpatterns.io/ci/?pattern=mcgitops
+issues_url: https://github.com/trilio-demo/trilio-continuous-restore/issues
+docs_url: https://validatedpatterns.io/patterns/trilio-continuous-restore/
+ci_url: https://validatedpatterns.io/ci/?pattern=trilio-continuous-restore
 # can be sandbox, tested or maintained
 tier: maintained
 owners: vebutton

@@ -33,7 +33,7 @@ A WordPress + MySQL deployment is included as a representative stateful applicat
 └────────────────────┬────────────────────────────────────┘
                      │ shared S3 BackupTarget
 ┌────────────────────▼────────────────────────────────────┐
-│  DR Cluster / Spoke (group-one)                         │
+│  DR Cluster / Spoke (secondary)                         │
 │                                                         │
 │  ACM-managed ──► ArgoCD ──► Trilio Operator (OLM)       │
 │                               └─► TrilioVaultManager   │
@@ -118,16 +118,16 @@ A valid Trilio for Kubernetes license key. This pattern supports Trilio for Kube
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/trilio-demo/multicloud-gitops
-cd multicloud-gitops
+git clone https://github.com/trilio-demo/trilio-continuous-restore
+cd trilio-continuous-restore
 ```
 
 ### 2. Configure S3 bucket details
 
-Edit `values-hub.yaml` and `values-group-one.yaml` to set your S3 bucket name and region:
+Edit `values-hub.yaml` and `values-secondary.yaml` to set your S3 bucket name and region:
 
 ```yaml
-# In both values-hub.yaml and values-group-one.yaml, under the trilio-operand app overrides:
+# In both values-hub.yaml and values-secondary.yaml, under the trilio-operand app overrides:
 overrides:
   - name: backupTarget.bucketName
     value: <your-bucket-name>
@@ -238,12 +238,12 @@ Import the DR cluster via the ACM console or `oc` CLI. Note the cluster name ass
 make onboard-spoke CLUSTER=<acm-cluster-name>
 ```
 
-This labels the cluster with `clusterGroup=group-one`, which triggers ACM to deploy the spoke configuration via ArgoCD.
+This labels the cluster with `clusterGroup=secondary`, which triggers ACM to deploy the spoke configuration via ArgoCD.
 
 After running `make onboard-spoke`, kick the spoke-side ArgoCD application to sync immediately (run on the spoke cluster context):
 
 ```bash
-oc patch application.argoproj.io dallas-multicloudops-group-one \
+oc patch application.argoproj.io main-trilio-continuous-restore-secondary \
   -n openshift-gitops --type merge \
   -p '{"operation":{"sync":{}}}'
 ```
@@ -420,12 +420,12 @@ oc get pod <pod-name> -n imperative -o jsonpath='{.spec.initContainers[*].name}'
 
 The init container name matches the job name (e.g., `trilio-backup`). Each init container runs one playbook; a failure stops all subsequent jobs.
 
-### Spoke ArgoCD not syncing after values-group-one.yaml changes
+### Spoke ArgoCD not syncing after values-secondary.yaml changes
 
 The spoke application has no automated sync. Kick it manually on the spoke context:
 
 ```bash
-oc patch application.argoproj.io dallas-multicloudops-group-one \
+oc patch application.argoproj.io main-trilio-continuous-restore-secondary \
   -n openshift-gitops --type merge \
   -p '{"operation":{"sync":{}}}'
 ```

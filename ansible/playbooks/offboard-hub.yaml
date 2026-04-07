@@ -9,7 +9,7 @@
 #   # or: make offboard-hub
 #
 # What this playbook does (in safe order):
-#   1.  Detach group-one DR clusters from ACM (removes spoke app-of-apps + child apps)
+#   1.  Detach secondary DR clusters from ACM (removes spoke app-of-apps + child apps)
 #   2.  Suspend imperative CronJob — stops jobs fighting cleanup
 #   3.  Disable hub app-of-apps automated sync — MUST happen before operator removal
 #   4.  Delete hub ArgoCD child apps (trilio/wordpress only; acm/vault/eso left intact)
@@ -50,8 +50,8 @@
     gitops_namespace: openshift-gitops
     # Hub app-of-apps lives in openshift-gitops; child apps live in their own
     # namespace named after the app-of-apps (same pattern as spoke).
-    hub_app_of_apps: "dallas-multicloudops-hub"
-    hub_child_app_namespace: "dallas-multicloudops-hub"
+    hub_app_of_apps: "main-trilio-continuous-restore-hub"
+    hub_child_app_namespace: "main-trilio-continuous-restore-hub"
     # Only Trilio/WordPress apps — acm, vault, golang-external-secrets are
     # hub infrastructure and must NOT be deleted.
     hub_child_apps:
@@ -68,16 +68,16 @@
     # Set to false to skip Vault secret cleanup
     clean_vault: true
     # ACM label that identifies DR spoke clusters
-    spoke_cluster_group_label: "clusterGroup=group-one"
+    spoke_cluster_group_label: "clusterGroup=secondary"
 
   tasks:
 
     # -------------------------------------------------------------------------
-    # Pre-flight: abort if any cluster still has clusterGroup=group-one.
+    # Pre-flight: abort if any cluster still has clusterGroup=secondary.
     # Spoke resources must be cleaned up first (make offboard-spoke CLUSTER=<name>)
     # before the hub can be safely torn down.
     # -------------------------------------------------------------------------
-    - name: Check for active group-one spoke clusters
+    - name: Check for active secondary spoke clusters
       ansible.builtin.shell: |
         kubectl get managedcluster -l {{ spoke_cluster_group_label }} \
           --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null
@@ -85,10 +85,10 @@
       changed_when: false
       tags: [preflight]
 
-    - name: Abort if group-one spokes are still labelled
+    - name: Abort if secondary spokes are still labelled
       ansible.builtin.fail:
         msg: |
-          The following clusters still have clusterGroup=group-one and are being
+          The following clusters still have clusterGroup=secondary and are being
           actively managed by ACM. Offboard each spoke first, then re-run this playbook.
 
           Clusters still labelled:
@@ -100,7 +100,7 @@
       tags: [preflight]
 
     # -------------------------------------------------------------------------
-    # 1. Detach dr-cluster (and any other group-one clusters) from ACM entirely.
+    # 1. Detach dr-cluster (and any other secondary clusters) from ACM entirely.
     #    The clusterGroup label is already gone (removed during spoke offboard).
     #    Deleting the ManagedCluster removes the cluster from ACM inventory.
     #    The spoke cluster itself keeps running.
@@ -379,7 +379,7 @@
         echo "=== Remaining ArgoCD Applications (trilio/wordpress) ==="
         kubectl get applications.argoproj.io -n {{ hub_child_app_namespace }} --no-headers 2>/dev/null | \
           grep -E "trilio|wordpress" || echo "  none"
-        echo "=== ACM ManagedClusters still labelled group-one ==="
+        echo "=== ACM ManagedClusters still labelled secondary ==="
         kubectl get managedcluster -l {{ spoke_cluster_group_label }} \
           --no-headers 2>/dev/null || echo "  none"
       register: _verify

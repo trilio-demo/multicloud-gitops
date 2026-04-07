@@ -4,7 +4,7 @@
 # Imperative framework job — Spoke Phase 2: restore from latest Available
 # ConsistentSet to wordpress-restore on this DR cluster.
 #
-# Runs on a schedule (default every 10 minutes) on each group-one spoke via the
+# Runs on a schedule (default every 10 minutes) on each secondary spoke via the
 # Validated Patterns imperative framework.  Idempotent: skips if a Completed
 # restore already exists in restore_namespace.  Skips if no Available
 # ConsistentSet exists yet (trilio-cr-status Phase 1 not complete).
