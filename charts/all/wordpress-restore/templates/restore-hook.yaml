@@ -22,6 +22,6 @@ spec:
         - |
           mysql -u root --password=$MYSQL_ROOT_PASSWORD wordpress -Bse \
             "UPDATE wp_options SET option_value='http://{{ $hostname }}' WHERE option_name IN ('siteurl','home')"
-    ignoreFailure: false
+    ignoreFailure: true
     maxRetryCount: 2
     timeoutSeconds: 30
