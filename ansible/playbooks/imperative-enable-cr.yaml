@@ -131,14 +131,26 @@
         (_target.resources[0].status.availableContinuousRestoreInstances | default({})) | length == 0
 
     # -------------------------------------------------------------------------
-    # 5. Find the first DR cluster that appears in Target CR instances
-    #    Use the first matching cluster (idempotent re-run will skip if BP exists)
+    # 5. Find the first DR cluster that appears in Target CR instances.
+    #    The TVM instanceName is the OCP cluster name (global.localClusterName),
+    #    NOT the ACM ManagedCluster import name. Extract the OCP cluster name
+    #    from the apiserverurl.openshift.io claim (first label after "api.").
     # -------------------------------------------------------------------------
-    - name: Match DR cluster to Target instance
+    - name: Build map of ACM cluster → OCP cluster name
+      ansible.builtin.set_fact:
+        _dr_cluster_ocp_names: >-
+          {{ _dr_clusters
+             | map(attribute='status.clusterClaims')
+             | map('selectattr', 'name', 'equalto', 'apiserverurl.openshift.io')
+             | map('map', attribute='value')
+             | map('first')
+             | map('regex_replace', '^https://api\\.([^.]+)\\..*', '\\1')
+             | list }}
+
+    - name: Match DR cluster OCP name to Target instance
       ansible.builtin.set_fact:
         _spoke_cluster_name: >-
-          {{ (_dr_clusters
-              | map(attribute='metadata.name')
+          {{ (_dr_cluster_ocp_names
               | select('in',
                   (_target.resources[0].status.availableContinuousRestoreInstances
                    | dict2items | map(attribute='value.instanceName') | list))
