@@ -106,7 +106,7 @@
               kind: BackupPlan
               name: "{{ backupplan_name }}"
               namespace: "{{ app_namespace }}"
-            backupType: "{{ backup_type }}"
+            type: "{{ backup_type }}"
 
     - name: Wait for Backup to complete
       kubernetes.core.k8s_info:
