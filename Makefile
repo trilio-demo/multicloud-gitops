@@ -26,7 +26,8 @@ onboard-spoke: ## Onboard a DR spoke cluster: make onboard-spoke CLUSTER=<manage
 	@oc label managedcluster $(CLUSTER) clusterGroup=group-one --overwrite
 	@echo "Label applied. ACM will now provision the full Trilio DR stack (~15-25 min)."
 	@echo ""
-	@echo "ACTION REQUIRED: The spoke app-of-apps has no automated sync. Kick it manually:"
+	@echo "ACTION REQUIRED: The spoke app-of-apps has no automated sync."
+	@echo "Switch to the SPOKE cluster context and run:"
 	@echo "  oc patch application.argoproj.io dallas-multicloudops-group-one -n openshift-gitops \\"
 	@echo "    --type merge -p '{\"operation\":{\"sync\":{}}}'"
 	@echo ""
