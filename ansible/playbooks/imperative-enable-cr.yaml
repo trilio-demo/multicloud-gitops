@@ -136,14 +136,14 @@
     #    NOT the ACM ManagedCluster import name. Extract the OCP cluster name
     #    from the apiserverurl.openshift.io claim (first label after "api.").
     # -------------------------------------------------------------------------
-    - name: Build map of ACM cluster → OCP cluster name
+    - name: Build list of OCP cluster names from group-one ACM clusters
       ansible.builtin.set_fact:
         _dr_cluster_ocp_names: >-
           {{ _dr_clusters
              | map(attribute='status.clusterClaims')
-             | map('selectattr', 'name', 'equalto', 'apiserverurl.openshift.io')
-             | map('map', attribute='value')
-             | map('first')
+             | flatten
+             | selectattr('name', 'equalto', 'apiserverurl.openshift.io')
+             | map(attribute='value')
              | map('regex_replace', '^https://api\\.([^.]+)\\..*', '\\1')
              | list }}
 
