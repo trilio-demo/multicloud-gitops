@@ -144,7 +144,7 @@
              | flatten
              | selectattr('name', 'equalto', 'apiserverurl.openshift.io')
              | map(attribute='value')
-             | map('regex_replace', '^https://api\\.([^.]+)\\..*', '\\1')
+             | map('regex_replace', '^https://api\.([^.]+)\..*', '\1')
              | list }}
 
     - name: Debug OCP names and available instances
