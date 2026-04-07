@@ -73,17 +73,26 @@ clusterGroup:
     # https://validatedpatterns.io/patterns/multicloud-gitops/mcg-imperative-actions/
     jobs:
       # -----------------------------------------------------------------------
-      # Req 12 — Spoke-side Continuous Restore validation
-      # Checks that the CR pipeline has delivered ConsistentSets to this spoke.
-      # PASS when at least one Available ConsistentSet exists.
-      # Fails and retries every cycle until the CR pipeline has fired at least once.
+      # Req 12 — Spoke-side Continuous Restore automation
+      # Phase 1: Validate CR pipeline has delivered ConsistentSets to this spoke.
+      #          PASS when at least one Available ConsistentSet exists.
+      #          Fails and retries every cycle until the CR pipeline has fired.
+      # Phase 2: Restore from the latest Available ConsistentSet to wordpress-restore.
+      #          Accelerated-RTO path: PVC data pre-staged locally by EventTarget.
+      #          Skips if Completed restore already exists.
       #
       # Check status at any time:
       #   oc get configmap trilio-cr-status -n imperative -o yaml
       # -----------------------------------------------------------------------
+      # Phase 1: validate ConsistentSet availability; fails until CR pipeline fires
       - name: trilio-cr-status
         playbook: ansible/playbooks/imperative-cr-status.yaml
         timeout: 120
+
+      # Phase 2: restore from latest ConsistentSet; skips if Completed restore exists
+      - name: trilio-cr-restore
+        playbook: ansible/playbooks/imperative-cr-restore.yaml
+        timeout: 1800
   # Explicitly mention the cluster-state based overrides we plan to use for this pattern.
   # We can use self-referential variables because the chart calls the tpl function with these variables defined
   sharedValueFiles:
