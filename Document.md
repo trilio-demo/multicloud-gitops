@@ -52,15 +52,16 @@ A WordPress + MySQL deployment is included as a representative stateful applicat
 |-----------|-------|------|
 | Trilio Operator | Hub + Spoke | Installed via Operator Lifecycle Manager (OLM) from the `certified-operators` catalog, channel `5.3.x` |
 | TrilioVaultManager | Hub + Spoke | Trilio operand Custom Resource (CR); manages the Trilio data plane |
+| Red Hat OpenShift | Hub + Spoke | Container orchestration platform; provides OLM, storage, networking, and the GitOps operator substrate |
+| Red Hat OpenShift GitOps (ArgoCD) | Hub + Spoke | GitOps sync engine; all configuration is driven from Git |
+| Red Hat Advanced Cluster Management (ACM) | Hub | Cluster lifecycle, policy enforcement, and spoke provisioning |
+| Validated Patterns Imperative CronJob | Hub + Spoke | Runs the automated DR lifecycle on a 10-minute schedule |
 | BackupTarget | Hub + Spoke | Points to the shared S3 bucket; the spoke BackupTarget has the EventTarget flag set |
 | BackupPlan | Hub | Defines backup scope (wordpress namespace), quiesce/unquiesce hooks, and retention |
 | CR BackupPlan | Hub | Continuous Restore variant of BackupPlan; drives pre-staging on the spoke |
 | EventTarget pod | Spoke | Watches the shared S3 bucket for new backups; pre-stages Persistent Volume Claims (PVCs) locally |
 | ConsistentSet | Spoke | Cluster-scoped CR representing a fully pre-staged restore point |
 | HashiCorp Vault and External Secrets Operator (ESO) | Hub | Secret management; S3 credentials and Trilio license are never stored in Git |
-| Red Hat Advanced Cluster Management (ACM) | Hub | Cluster lifecycle, policy enforcement, and spoke provisioning |
-| Red Hat OpenShift GitOps (ArgoCD) | Hub + Spoke | GitOps sync engine; all configuration is driven from Git |
-| Validated Patterns Imperative CronJob | Hub + Spoke | Runs the automated DR lifecycle on a 10-minute schedule |
 
 ### How Continuous Restore Works
 
