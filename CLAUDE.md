@@ -26,7 +26,7 @@ Red Hat Validated Pattern for Disaster Recovery with Trilio on OpenShift.
 
 OLM Subscriptions are declared inline in values files — there are no standalone Subscription YAML files.
 
-## PRD Implementation Status (as of 2026-03-10)
+## PRD Implementation Status (as of 2026-04-06)
 | Req | Description | Status |
 |-----|-------------|--------|
 | 1 | Trilio via OLM + Helm | Done |
@@ -35,10 +35,19 @@ OLM Subscriptions are declared inline in values files — there are no standalon
 | 4 | BackupPlan with quiesce/unquiesce hooks | Done |
 | 5 | Backup via Ansible playbook | Done |
 | 6/6a | Restore + Route transform | Done |
-| 6b | Post-restore MySQL Hook CR | Partial (manual deploy works; GitOps pending) |
-| 6c | DR namespace pre-provisioning via GitOps | Not Started |
-| 7 | Continuous Restore (EventTarget) | Not Started |
+| 6b | Post-restore MySQL Hook CR (wordpress-restore-hook) | Done (deployed via wordpress-restore Helm chart, Req 6c) |
+| 6c | DR namespace pre-provisioning via GitOps | Done |
+| 7 | Continuous Restore (EventTarget) | Done |
+| 7a | hookConfig for ConsistentSet restores | Done (works in 5.3.x; imperative-cr-restore.yaml) |
 | 8 | VM-based app (OCP Virt) | Deferred |
+| 9 | Trilio 5.3.x upgrade | Done |
+| 10 | Spoke onboarding OLM/ArgoCD race fix | Done |
+| 11 | Document.md usage manual | Not Started |
+| 12 | Imperative framework E2E automation | Done |
+| 13 | VP uninstall teardown validation | Done |
+| 14 | Remove multicloud-gitops upstream overhead | Done |
+| 15 | Rename pattern + cluster groups | Not Started |
+| 16 | Publish to trilio-continuous-restore repo | Not Started |
 
 ## Key Gotchas (read before editing)
 - **Vault secrets must be plain text** — ESO handles base64 encoding. Pre-encoded values cause double-encoding and break the BackupTarget (stays `Failed`).

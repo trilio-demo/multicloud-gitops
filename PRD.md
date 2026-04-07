@@ -98,7 +98,7 @@ Each item maps to a deliverable in the Implementation Matrix below.
 | 6b | Post-restore MySQL Hook CR (wordpress-restore-hook) for wp_options URL rewrite | P1 — Partial (manual deploy works; GitOps automation pending via 6c) |
 | 6c | DR restore namespace (wordpress-restore) + Hook CR pre-provisioned via GitOps on all clusters | P1 — Done |
 | 7 | Continuous Restore via EventTarget: pre-stage PVCs on DR cluster from ConsistentBackupPlan for accelerated RTO | P1 — Done |
-| 7a | Hook CR support for ConsistentSet restores: post-restore URL rewrite via hookConfig (currently applied via direct database exec) | P2 — Not Started |
+| 7a | Hook CR support for ConsistentSet restores: post-restore URL rewrite via hookConfig | P2 — Done |
 | 8 | (Optional) Deploy a VM-based application (OpenShift Virtualization) | P2 — Deferred |
 | 9 | Upgrade to Trilio 5.3.x: adopt native license-via-Secret model; remove License Job workaround | P1 — Done |
 | 10 | Spoke onboarding: resolve OLM/ArgoCD race condition so trilio-operand self-heals without manual sync | P1 — Done |
@@ -195,9 +195,11 @@ EventTarget pod running                           │ DR Test triggered
 
 ### Req 7a — Hook CR Support for ConsistentSet Restores
 
-For standard backup/location restores, the `dr-restore.yaml` playbook includes a pre-deployed `Hook` CR in the Restore CR's `hookConfig` — this causes Trilio to automatically execute the MySQL wp_options URL rewrite post-restore. For ConsistentSet restores, the playbook achieves the same result via a direct `kubectl exec` into the MySQL container (section 10 of the playbook). Both paths produce an identical outcome.
+**Status: Done (Trilio 5.3.x)**
 
-Adding `hookConfig` support for ConsistentSet restores would unify the two code paths and eliminate the direct exec step. This is a planned enhancement for a future iteration.
+In Trilio 5.3.x, `hookConfig` is supported for ConsistentSet restores. The `imperative-cr-restore.yaml` playbook checks for the `wordpress-restore-hook` Hook CR in the restore namespace and includes it in `hookConfig` if present — the same pattern used by `imperative-restore-standard.yaml`. The Hook CR itself has `ignoreFailure: true` so a hook failure does not block the restore from completing.
+
+The `dr-restore.yaml` manual restore playbook still uses direct MySQL exec for ConsistentSet restores (section 10) as a belt-and-suspenders fallback. That can be updated to use hookConfig in a future cleanup pass.
 
 ### Req 11 — Pattern Documentation for validatedpatterns.io
 
@@ -231,80 +233,43 @@ The VP imperative framework executes Ansible playbooks as Kubernetes Jobs on a s
 - Enable demo scenarios where the full hub + spoke DR workflow completes automatically in ~30 minutes after clusters are up
 - Alert on success or failure so operators know when DR readiness changes
 
-#### Workflow Phases
+#### Implemented Workflow
 
-**Phase 1 — Hub Ready: Ensure a backup exists**
+The VP imperative framework runs each job as a sequential init container in the CronJob pod (every 10 minutes). A failed init container blocks all subsequent ones and causes the pod to show `Init:Error`. Jobs are idempotent — they skip work already done and exit cleanly.
 
-Trigger: Hub cluster is up, Trilio TVM is healthy, WordPress is running.
+**Hub jobs (`values-hub.yaml`):**
 
-Jobs:
-1. `imperative-validate` — poll until CSV Succeeded + TVM Deployed/Updated + License present + BackupTarget Available; fail fast with diagnostic output if not ready within timeout
-2. `imperative-backup` — check if any Available Backup exists for `wordpress-backup-plan-cr` (the CR BackupPlan); if none, create one; wait for Available; idempotent (skips if backup already present)
+| Phase | Job name | Playbook | What it does |
+|-------|----------|----------|--------------|
+| 1 | `trilio-enable-cr` | `imperative-enable-cr.yaml` | Discovers group-one ACM clusters; creates CR BackupPlan + ContinuousRestore Policy; skips if Available |
+| 2 | `trilio-cr-backup` | `imperative-cr-backup.yaml` | Creates a Backup against the CR BackupPlan to activate spoke replication; skips if Available CR backup exists |
+| 3 | `trilio-backup` | `imperative-backup.yaml` | Creates a standard backup (wordpress-backup-plan); skips if Available backup exists |
+| 4 | `trilio-restore-standard` | `imperative-restore-standard.yaml` | Restores latest standard backup to wordpress-restore; skips if Completed restore exists |
+| 5 | `trilio-e2e-status` | `imperative-e2e-status.yaml` | Aggregates all phase results into `trilio-dr-status` ConfigMap; fails job until all phases pass |
 
-**Phase 2 — DR Cluster Joins: Enable Continuous Restore**
+**Spoke jobs (`values-group-one.yaml`):**
 
-Trigger: ACM detects a cluster with label `clusterGroup=group-one` that does not yet have an Available ConsistentSet on the shared BackupTarget.
+| Phase | Job name | Playbook | What it does |
+|-------|----------|----------|--------------|
+| 1 | `trilio-cr-status` | `imperative-cr-status.yaml` | Validates Available ConsistentSet exists; writes `trilio-cr-status` ConfigMap; fails until CR pipeline has fired |
+| 2 | `trilio-cr-restore` | `imperative-cr-restore.yaml` | Restores from latest ConsistentSet → accelerated-RTO DR path; includes hookConfig for URL rewrite |
 
-Jobs:
-3. `imperative-enable-cr` — wraps `enable-continuous-restore.yaml`; runs on hub with DR cluster context; retries until CR BackupPlan Available; idempotent (skips if CR BackupPlan already present and Available)
-4. `imperative-wait-cs` — poll BackupTarget on DR cluster until at least one ConsistentSet is Available; timeout with alert
+#### Status Check Commands
+```bash
+# Hub E2E status
+oc get configmap trilio-dr-status -n imperative -o yaml
+# or
+make dr-status
 
-**Phase 3 — DR Test: Restore and Validate**
-
-Trigger: ConsistentSet Available on DR cluster.
-
-Jobs:
-5. `imperative-restore` — wraps `dr-restore.yaml -e restore_method=consistentset`; targets most recent Available ConsistentSet; waits for Restore Completed; applies Route transform
-6. `imperative-validate-restore` — curl WordPress at DR URL; confirm HTTP 200; verify wp_options siteurl/home match DR URL; output PASS/FAIL with timestamp
-
-**Phase 4 — Alert**
-
-7. `imperative-alert` — post result summary (cluster name, backup name, ConsistentSet name, restore name, pass/fail, elapsed time) to a configured output (log, Slack webhook, or ACM policy status)
+# Spoke CR status (run on spoke context)
+oc get configmap trilio-cr-status -n imperative -o yaml
+```
 
 #### Implementation Notes
-- Each phase is a separate playbook in `ansible/playbooks/` prefixed `imperative-*.yaml`
-- Playbooks must be idempotent — repeated runs produce the same result without side effects
-- Each job declares `timeout` in seconds; total `activeDeadlineSeconds` covers the full pipeline (~2 hours for cold-start)
-- The `imperative.schedule` in `values-hub.yaml` drives Phase 1 continuously; Phase 2–4 are edge-triggered (run once when condition first satisfied) — implement with a flag ConfigMap or Backup/ConsistentSet existence check to avoid re-running on every schedule tick
-- DR cluster context must be available to hub-side imperative jobs: store the DR cluster kubeconfig in Vault at `secret/global/dr-cluster-kubeconfig`; ESO ExternalSecret loads it into a Secret consumed by the imperative Job Pod
-
-#### New Playbooks Required
-| Playbook | Phase | Description |
-|----------|-------|-------------|
-| `ansible/playbooks/imperative-validate.yaml` | 1 | Pre-flight health check (CSV, TVM, License, BackupTarget) |
-| `ansible/playbooks/imperative-backup.yaml` | 1 | Ensure Available backup exists; create if absent |
-| `ansible/playbooks/imperative-enable-cr.yaml` | 2 | Enable Continuous Restore on DR cluster (idempotent) |
-| `ansible/playbooks/imperative-wait-cs.yaml` | 2 | Poll for Available ConsistentSet on DR cluster |
-| `ansible/playbooks/imperative-restore.yaml` | 3 | Restore from ConsistentSet; apply Route transform |
-| `ansible/playbooks/imperative-validate-restore.yaml` | 3 | Verify WordPress accessible at DR URL |
-| `ansible/playbooks/imperative-alert.yaml` | 4 | Emit structured pass/fail result |
-
-#### `values-hub.yaml` imperative.jobs additions (sketch)
-```yaml
-imperative:
-  jobs:
-    - name: imperative-validate
-      playbook: ansible/playbooks/imperative-validate.yaml
-      timeout: 600
-    - name: imperative-backup
-      playbook: ansible/playbooks/imperative-backup.yaml
-      timeout: 1800
-    - name: imperative-enable-cr
-      playbook: ansible/playbooks/imperative-enable-cr.yaml
-      timeout: 600
-    - name: imperative-wait-cs
-      playbook: ansible/playbooks/imperative-wait-cs.yaml
-      timeout: 3600
-    - name: imperative-restore
-      playbook: ansible/playbooks/imperative-restore.yaml
-      timeout: 1800
-    - name: imperative-validate-restore
-      playbook: ansible/playbooks/imperative-validate-restore.yaml
-      timeout: 300
-    - name: imperative-alert
-      playbook: ansible/playbooks/imperative-alert.yaml
-      timeout: 120
-```
+- All playbooks include a soft Trilio health check (CSV + TVM) and exit cleanly if not ready
+- Cleanup of failed Restore CRs and PVCs is automatic before each restore attempt
+- Hub cluster name matching uses `apiserverurl.openshift.io` clusterClaim, not ACM import name
+- The regex pattern in single-quoted YAML uses single backslash (`\.`) not double (`\\.`)
 
 ---
 

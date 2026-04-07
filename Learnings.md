@@ -1515,3 +1515,43 @@ oc get installplan -n trilio-system
 PLAN=<install-plan-name>
 oc patch installplan $PLAN -n trilio-system --type merge -p '{"spec":{"approved":true}}'
 ```
+
+## Regex Backslash Escaping in Single-Quoted YAML (Jinja2 `map('regex_replace', ...)`)
+
+In YAML single-quoted strings, backslash is **not** an escape character — it is literal. This creates a trap when writing regex patterns inside Jinja2 filter chains in a `>-` block scalar:
+
+```yaml
+# WRONG — single-quoted YAML: '\\.' is literally two chars '\' and '.'
+# Python regex sees '\\.' = literal backslash + any char — does NOT match a dot in a URL
+| map('regex_replace', '^https://api\\.([^.]+)\\..*', '\\1')
+
+# CORRECT — single-quoted YAML: '\.' is literally '\' and '.'
+# Python regex sees '\.' = escaped dot = literal dot match
+| map('regex_replace', '^https://api\.([^.]+)\..*', '\1')
+```
+
+When the regex doesn't match (wrong escaping), `regex_replace` returns the original string unchanged — making the bug hard to spot since there is no error, just a no-op.
+
+**Rule:** In single-quoted YAML Jinja2 strings, use single backslash `\.` for a literal dot and `\1` for a backreference. Double backslash `\\.` means "match a literal backslash" — almost never what you want in a URL regex.
+
+**Note:** This applies to `map('regex_replace', ...)`. When calling `regex_replace` directly on a value (e.g., `{{ _url | regex_replace('^...', '\1') }}`), the same rule applies but the context makes it easier to test interactively.
+
+## Imperative Framework Pod Init Containers — How the Job Sequence Works
+
+The VP imperative CronJob pod runs each job as a sequential **init container**. The pod status `Init:3/6` means 3 of 6 init containers have completed.
+
+Init containers in order:
+1. **Setup** — VP framework: git clone, environment prep
+2–N. **One per job** — each runs a single Ansible playbook
+
+All init containers must exit 0 for the pod to reach `Running` (the main container is a no-op). If any init container fails → `Init:Error` → pod stops and all subsequent jobs are skipped. The CronJob retries at the next scheduled tick (every 10 minutes).
+
+This means job ordering in `values-hub.yaml` / `values-group-one.yaml` matters: a failing early job blocks all later ones. Use `meta: end_play` (not `fail`) for graceful skips so the pod completes successfully when no work is needed.
+
+## ConsistentSet hookConfig Supported in Trilio 5.3.x
+
+In Trilio 5.2.x, `hookConfig` was not supported (or unreliable) for ConsistentSet restores. The `dr-restore.yaml` manual playbook worked around this by executing a direct MySQL `kubectl exec` post-restore (section 10) to rewrite wp_options URLs.
+
+In Trilio 5.3.x, `hookConfig` works for ConsistentSet restores. The `imperative-cr-restore.yaml` playbook uses the same hookConfig pattern as `imperative-restore-standard.yaml` — it checks for the `wordpress-restore-hook` Hook CR and includes it if present. The Hook CR has `ignoreFailure: true` so a hook failure does not block the restore.
+
+The `dr-restore.yaml` manual playbook still uses direct MySQL exec for ConsistentSet restores as a fallback; that can be unified with hookConfig in a future cleanup.
