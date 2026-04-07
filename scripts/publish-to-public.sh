@@ -65,7 +65,6 @@ COPY_DIRS=(
 # Forbidden files — script aborts if any of these end up in the target
 # ---------------------------------------------------------------------------
 FORBIDDEN_FILES=(
-  CLAUDE.md
   PRD.md
   Learnings.md
   Divergence.md
