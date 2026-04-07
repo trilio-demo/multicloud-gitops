@@ -2,16 +2,16 @@
 
 ## Overview
 
-This Validated Pattern delivers an automated, GitOps-driven Disaster Recovery solution for stateful applications running on Red Hat OpenShift. It integrates [Trilio for Kubernetes](https://trilio.io) with the [Red Hat Validated Patterns framework](https://validatedpatterns.io) to provide:
+This Validated Pattern delivers an automated, GitOps-driven Disaster Recovery (DR) solution for stateful applications running on Red Hat OpenShift. It integrates [Trilio for Kubernetes](https://trilio.io) with the [Red Hat Validated Patterns framework](https://validatedpatterns.io) to provide:
 
 - **Automated backup** of stateful workloads on the primary (hub) cluster
-- **Continuous Restore** — Trilio's accelerated-RTO DR path that continuously pre-stages backup data on the DR cluster so that recovery requires only metadata retrieval, not a full data transfer
+- **Continuous Restore** — Trilio's accelerated Recovery Time Objective (RTO) DR path that continuously pre-stages backup data on the DR cluster so that recovery requires only metadata retrieval, not a full data transfer
 - **Automated DR testing** — the full backup-to-restore lifecycle runs as a scheduled, self-healing GitOps workflow with no human intervention after initial setup
 - **Multi-cluster lifecycle management** via Red Hat Advanced Cluster Management (ACM)
 
 ### Use Case
 
-The pattern targets organisations that need a documented, repeatable DR posture for Kubernetes-native workloads — particularly those that must demonstrate RTO/RPO targets through regular, automated DR tests rather than annual manual exercises.
+The pattern targets organisations that need a documented, repeatable DR posture for Kubernetes-native workloads — particularly those that must demonstrate RTO/Recovery Point Objective (RPO) targets through regular, automated DR tests rather than annual manual exercises.
 
 A WordPress + MySQL deployment is included as a representative stateful application. It serves as the reference workload for the full backup, restore, and URL-rewrite lifecycle.
 
@@ -50,21 +50,21 @@ A WordPress + MySQL deployment is included as a representative stateful applicat
 
 | Component | Where | Role |
 |-----------|-------|------|
-| ACM | Hub | Cluster lifecycle, policy, spoke provisioning |
-| ArgoCD | Hub + Spoke | GitOps sync engine; all config driven from Git |
-| Vault + ESO | Hub | Secret management; S3 credentials and Trilio license never in Git |
-| Trilio Operator | Hub + Spoke | Installed via OLM (`certified-operators`, channel `5.3.x`) |
-| TrilioVaultManager | Hub + Spoke | Operand CR; manages the Trilio data plane |
-| BackupTarget | Hub + Spoke | Points to shared S3 bucket; spoke has EventTarget flag set |
-| BackupPlan | Hub | Defines scope (wordpress namespace), hooks, and retention |
-| CR BackupPlan | Hub | Continuous Restore variant; drives spoke pre-staging |
-| EventTarget pod | Spoke | Watches shared S3 for new backups; pre-stages PVCs locally |
+| Trilio Operator | Hub + Spoke | Installed via Operator Lifecycle Manager (OLM) from the `certified-operators` catalog, channel `5.3.x` |
+| TrilioVaultManager | Hub + Spoke | Trilio operand Custom Resource (CR); manages the Trilio data plane |
+| BackupTarget | Hub + Spoke | Points to the shared S3 bucket; the spoke BackupTarget has the EventTarget flag set |
+| BackupPlan | Hub | Defines backup scope (wordpress namespace), quiesce/unquiesce hooks, and retention |
+| CR BackupPlan | Hub | Continuous Restore variant of BackupPlan; drives pre-staging on the spoke |
+| EventTarget pod | Spoke | Watches the shared S3 bucket for new backups; pre-stages Persistent Volume Claims (PVCs) locally |
 | ConsistentSet | Spoke | Cluster-scoped CR representing a fully pre-staged restore point |
-| Imperative CronJob | Hub + Spoke | VP imperative framework; runs the DR lifecycle automatically |
+| HashiCorp Vault and External Secrets Operator (ESO) | Hub | Secret management; S3 credentials and Trilio license are never stored in Git |
+| Red Hat Advanced Cluster Management (ACM) | Hub | Cluster lifecycle, policy enforcement, and spoke provisioning |
+| Red Hat OpenShift GitOps (ArgoCD) | Hub + Spoke | GitOps sync engine; all configuration is driven from Git |
+| Validated Patterns Imperative CronJob | Hub + Spoke | Runs the automated DR lifecycle on a 10-minute schedule |
 
 ### How Continuous Restore Works
 
-1. The hub creates a backup using the CR BackupPlan and writes it to shared S3 storage.
+1. The hub creates a backup using the CR BackupPlan and writes it to the shared S3 storage.
 2. The EventTarget pod on the spoke detects the new backup and begins copying volume data locally — ahead of any DR event.
 3. When the spoke's imperative job detects an Available ConsistentSet, it submits a Restore CR. Because the data is already local, only backup metadata is fetched — resulting in significantly lower RTO than a standard on-demand restore.
 4. The post-restore Hook CR rewrites WordPress database URLs to the DR cluster's ingress domain.
@@ -77,11 +77,11 @@ A WordPress + MySQL deployment is included as a representative stateful applicat
 
 | Cluster | Role | Minimum size |
 |---------|------|-------------|
-| Hub | Primary; runs ACM, Vault, ArgoCD, Trilio | 3 worker nodes, 8 vCPU / 32 GB each |
+| Hub | Primary; runs ACM, HashiCorp Vault, ArgoCD, Trilio | 3 worker nodes, 8 vCPU / 32 GB each |
 | DR Spoke | Disaster Recovery target | 3 worker nodes, 8 vCPU / 32 GB each |
 
 Both clusters must:
-- Run OpenShift 4.12 or later
+- Run Red Hat OpenShift 4.18 or later
 - Have network access to the shared S3 bucket
 - Be reachable by ACM on the hub
 
@@ -89,12 +89,12 @@ Both clusters must:
 
 A single S3-compatible bucket accessible from both clusters. Required values:
 - Bucket name
-- Bucket region (must match the bucket's actual region — redirect-based region resolution is not used)
+- Bucket region (must match the bucket's actual region — always set this explicitly)
 - Access key and secret key with read/write permissions on the bucket
 
 ### Trilio License
 
-A valid Trilio for Kubernetes license key. Obtain from [trilio.io](https://trilio.io) or your Trilio representative.
+A valid Trilio for Kubernetes license key. This pattern supports Trilio for Kubernetes version 5.3.0 and later. Obtain a license from [trilio.io](https://trilio.io) or your Trilio representative.
 
 ### Tooling (hub workstation)
 
@@ -172,7 +172,7 @@ make install
 ```
 
 This command:
-1. Bootstraps Vault and loads secrets from `values-secret.yaml`
+1. Bootstraps HashiCorp Vault and loads secrets from `values-secret.yaml`
 2. Installs the Validated Patterns operator on the hub
 3. Creates the `ValidatedPattern` CR which triggers ArgoCD to deploy all hub components
 
@@ -184,9 +184,9 @@ oc get application -n openshift-gitops
 
 All applications should reach `Synced / Healthy` within 10–15 minutes.
 
-**Alternative: manual secret population**
+**Alternative: manual secret population via `oc`**
 
-If you prefer to write secrets directly to Vault (e.g., rotating credentials without re-running `make install`):
+To write or rotate secrets directly in HashiCorp Vault without re-running `make install`:
 
 ```bash
 # Extract Vault root token
@@ -215,7 +215,7 @@ oc get target -n trilio-system
 # STATUS should be Available
 ```
 
-Check the E2E DR status (updated automatically by the imperative framework):
+Check the end-to-end DR status (updated automatically by the imperative framework):
 
 ```bash
 make dr-status
@@ -270,7 +270,7 @@ Expected progression:
 # Hub — all phases
 make dr-status
 
-# Spoke — ConsistentSet and restore status (spoke context)
+# Spoke — ConsistentSet and restore status (run on spoke context)
 oc get configmap trilio-cr-status -n imperative -o yaml
 ```
 
@@ -340,7 +340,7 @@ make offboard-spoke CLUSTER=<acm-cluster-name>
 make offboard-hub
 ```
 
-> Save your Vault root token and unseal keys before running `offboard-hub`. They are stored in the `imperative` namespace which is removed during offboard.
+> Save your HashiCorp Vault root token and unseal keys before running `offboard-hub`. They are stored in the `imperative` namespace which is removed during offboard.
 
 ---
 
@@ -384,7 +384,7 @@ oc get triliovaultmanager -n trilio-system -o yaml
 oc logs -n trilio-system -l app=k8s-triliovault-operator --tail=50
 ```
 
-Common cause: the license Secret has not been created yet. Check ExternalSecret status:
+Common cause: the license Secret has not been created yet. Check External Secrets Operator (ESO) ExternalSecret status:
 
 ```bash
 oc get externalsecret -n trilio-system
@@ -436,5 +436,5 @@ oc patch application.argoproj.io dallas-multicloudops-group-one \
 - [Trilio for Kubernetes documentation](https://docs.trilio.io/kubernetes)
 - [Red Hat Validated Patterns](https://validatedpatterns.io)
 - [Validated Patterns imperative framework](https://validatedpatterns.io/learn/imperative-actions/)
-- [Red Hat Advanced Cluster Management](https://access.redhat.com/documentation/en-us/red_hat_advanced_cluster_management_for_kubernetes)
+- [Red Hat Advanced Cluster Management (ACM)](https://access.redhat.com/documentation/en-us/red_hat_advanced_cluster_management_for_kubernetes)
 - [External Secrets Operator](https://external-secrets.io)
