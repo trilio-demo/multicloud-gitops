@@ -116,32 +116,37 @@ clusterGroup:
     jobs:
       # -----------------------------------------------------------------------
       # Req 12 — E2E DR lifecycle automation
-      # Phase 1: Create a backup if none exists (runs every 10 min until done)
-      # Phase 2: Restore latest backup to wordpress-restore (runs after Phase 1)
-      # Phase 3: Enable Continuous Restore for group-one DR clusters (auto-discovers
-      #          new clusters from ACM; idempotent; runs until CR BackupPlan Available)
-      # Phase 4: Aggregate E2E status; write ConfigMap; fail job if incomplete
+      # Phase 1: Enable Continuous Restore — creates CR BackupPlan; skips if Available
+      # Phase 2: CR backup — backup using CR BackupPlan to activate spoke replication
+      # Phase 3: Standard backup — backup using standard BackupPlan; skips if exists
+      # Phase 4: Restore — restores latest standard backup to wordpress-restore
+      # Phase 5: Aggregate E2E status; write ConfigMap; fail job if incomplete
       #          (VP framework surfaces failures in Job logs for alerting)
       #
       # Check E2E status at any time:
       #   oc get configmap trilio-dr-status -n imperative -o yaml
       # -----------------------------------------------------------------------
-      # Stage 1: validate framework wiring — skips immediately (CR BackupPlan already Available)
+      # Phase 1: skips immediately once CR BackupPlan is Available
       - name: trilio-enable-cr
         playbook: ansible/playbooks/imperative-enable-cr.yaml
         timeout: 900
 
-      # Phase 2: skip if Available backup already exists
+      # Phase 2: skip if CR BackupPlan not yet Available or CR backup already exists
+      - name: trilio-cr-backup
+        playbook: ansible/playbooks/imperative-cr-backup.yaml
+        timeout: 1200
+
+      # Phase 3: skip if Available standard backup already exists
       - name: trilio-backup
         playbook: ansible/playbooks/imperative-backup.yaml
         timeout: 1200
 
-      # Phase 3: creates a Restore CR in wordpress-restore; skips if Completed restore exists
+      # Phase 4: creates a Restore CR in wordpress-restore; skips if Completed restore exists
       - name: trilio-restore-standard
         playbook: ansible/playbooks/imperative-restore-standard.yaml
         timeout: 1800
 
-      # Phase 4: aggregate status — runs last; fails job until all phases pass
+      # Phase 5: aggregate status — runs last; fails job until all phases pass
       - name: trilio-e2e-status
         playbook: ansible/playbooks/imperative-e2e-status.yaml
         timeout: 120
