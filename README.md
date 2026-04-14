@@ -80,8 +80,10 @@ cd trilio-continuous-restore
 cp values-secret.yaml.template values-secret.yaml
 # Edit values-secret.yaml: fill in trilio-license key, S3 accessKey and secretKey
 
-# 3. Install
+# 3. Install (local — requires rhvp.cluster_utils installed)
 make install
+# OR (container-based — no local collection needed)
+./pattern.sh make install
 ```
 
 ### Validate

@@ -42,12 +42,12 @@ OLM Subscriptions are declared inline in values files — there are no standalon
 | 8 | VM-based app (OCP Virt) | Deferred |
 | 9 | Trilio 5.3.x upgrade | Done |
 | 10 | Spoke onboarding OLM/ArgoCD race fix | Done |
-| 11 | Document.md usage manual | Not Started |
+| 11 | Document.md usage manual | Done |
 | 12 | Imperative framework E2E automation | Done |
 | 13 | VP uninstall teardown validation | Done |
 | 14 | Remove multicloud-gitops upstream overhead | Done |
-| 15 | Rename pattern + cluster groups | Not Started |
-| 16 | Publish to trilio-continuous-restore repo | Not Started |
+| 15 | Rename pattern + cluster groups | Done |
+| 16 | Publish to trilio-continuous-restore repo | Done |
 
 ## Key Gotchas (read before editing)
 - **Vault secrets must be plain text** — ESO handles base64 encoding. Pre-encoded values cause double-encoding and break the BackupTarget (stays `Failed`).

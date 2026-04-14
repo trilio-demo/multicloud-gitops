@@ -104,7 +104,7 @@ A valid Trilio for Kubernetes license key. This pattern supports Trilio for Kube
 - `make`
 - `git`
 - `python3`
-- `rhvp.cluster_utils` Ansible collection (for `make install`):
+- `rhvp.cluster_utils` Ansible collection (for Option A local install):
 
   ```bash
   ansible-galaxy collection install community.okd kubernetes.core \
@@ -168,11 +168,19 @@ secrets:
 
 ### 4. Install the pattern
 
+**Option A — local install** (requires `rhvp.cluster_utils` installed locally):
+
 ```bash
 make install
 ```
 
-This command:
+**Option B — container-based install** (uses the VP utility container; no local collection install needed):
+
+```bash
+./pattern.sh make install
+```
+
+Either command:
 1. Bootstraps HashiCorp Vault and loads secrets from `values-secret.yaml`
 2. Installs the Validated Patterns operator on the hub
 3. Creates the `ValidatedPattern` CR which triggers ArgoCD to deploy all hub components
@@ -187,7 +195,7 @@ All applications should reach `Synced / Healthy` within 10–15 minutes.
 
 **Alternative: manual secret population via `oc`**
 
-To write or rotate secrets directly in HashiCorp Vault without re-running `make install`:
+To write or rotate secrets directly in HashiCorp Vault without re-running the install:
 
 ```bash
 # Extract Vault root token
