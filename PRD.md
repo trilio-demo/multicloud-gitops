@@ -107,7 +107,9 @@ Each item maps to a deliverable in the Implementation Matrix below.
 | 13 | VP Uninstall: validate Pattern CR deletion teardown; document finalizer cleanup; confirm ODF is preserved; verify spoke disassociation from ACM | P2 — Done |
 | 14 | Remove multicloud-gitops upstream overhead (hello-world, config-demo, RHDP-specific workflows where appropriate); retain or comment items with future value; document every decision | P1 — Done |
 | 15 | Rename pattern and cluster groups: `multicloud-gitops` → `trilio-continuous-restore`; `group-one` → `secondary`; `values-group-one.yaml` → `values-secondary.yaml`; update all references in values files, playbooks, Makefile, offboard scripts, tests, and metadata | P1 — Done |
-| 16 | Publish clean pattern to new public GitHub repo `trilio-continuous-restore`: push `dallas` branch as `main`; update repo URLs in metadata; confirm no lab-specific config or internal files in public repo | P1 — Not Started |
+| 16 | Publish clean pattern to new public GitHub repo `trilio-continuous-restore`: push `dallas` branch as `main`; update repo URLs in metadata; confirm no lab-specific config or internal files in public repo | P1 — Done |
+| 17 | Teardown clusters deployed from `dallas` branch: offboard spoke then hub; validate offboard playbooks work correctly with Req 15 renamed namespaces and cluster group labels | P0 — Not Started |
+| 18 | Fresh deployment validation from `main` branch: redeploy hub + spoke from `main`, validate all Req 15 renames work on a live cluster, run full E2E imperative automation to green | P0 — Not Started |
 
 ---
 
@@ -516,6 +518,59 @@ ArgoCD retries indefinitely but never self-recovers. Observed: attempt #7+ with 
 5. Validate on a fresh spoke onboard: `trilio-operand` should sync cleanly without the manual workaround
 
 **Current workaround:** Manually render and apply the ExternalSecrets to break the deadlock, then trigger a sync. See `Learnings.md` onboarding Known Issue section for exact commands and debugging runbook.
+
+---
+
+### Req 17 — Teardown `dallas`-Branch Clusters
+
+The active hub and spoke clusters were deployed using the `dallas` branch. Before a fresh `main`-branch deployment (Req 18), they must be cleanly torn down.
+
+**Context:** The `dallas`-branch deployment used the old cluster group name `group-one`. After Req 15, the renamed values use `secondary`. ArgoCD namespace names follow the pattern `<gitBranch>-<pattern>-<clusterGroup>`, so the live ArgoCD namespaces are currently:
+- Hub: `dallas-trilio-continuous-restore-hub`
+- Spoke: `dallas-trilio-continuous-restore-secondary`
+
+The offboard playbooks reference these namespace names — verify they are parameterized correctly for the live cluster state before running.
+
+**Steps:**
+1. Save Vault `root_token` and `unseal_keys` from the `imperative` namespace **before** offboard — the `vaultkeys` Secret is deleted with the namespace
+2. Offboard spoke first: `make offboard-spoke CLUSTER=<name>` (spoke context)
+3. Offboard hub: `make offboard-hub` (hub context)
+4. Confirm hub is left in a clean state: no VP namespaces, no Trilio resources, no ArgoCD Applications for this pattern
+5. Confirm spoke is disassociated from ACM and functional as a standalone cluster
+
+**Acceptance criteria:**
+- Both clusters pass post-offboard cleanup checks (no stuck finalizers, no orphaned namespaces)
+- Offboard playbooks complete without requiring manual intervention for the renamed namespaces
+
+**Status:** Not Started
+
+---
+
+### Req 18 — Fresh Deployment Validation from `main` Branch
+
+After teardown (Req 17), redeploy hub and spoke from the `main` branch to validate that all Req 15 renames are correct in a live cluster — not just in git. This is the first real-world test of the renamed pattern.
+
+**What this validates:**
+- VP operator picks up `main` branch correctly
+- ArgoCD namespace names are `main-trilio-continuous-restore-hub` and `main-trilio-continuous-restore-secondary`
+- `clusterGroup=secondary` label is applied to the spoke ManagedCluster (not `group-one`)
+- `values-secondary.yaml` is loaded (not `values-group-one.yaml`)
+- Imperative jobs come up and reach green on both hub and spoke
+- Full E2E automated path completes: hub backup → ConsistentSet → spoke restore
+
+**Steps:**
+1. Add hub cluster to VP operator pointing at `main` branch of `trilio-demo/multicloud-gitops`
+2. Populate Vault secrets (license + S3) once Vault is up
+3. Label spoke cluster with `clusterGroup=secondary` and onboard via ACM
+4. Wait for imperative framework to cycle; monitor `trilio-dr-status` (hub) and `trilio-cr-status` (spoke)
+5. Confirm full E2E completes automatically without intervention
+
+**Acceptance criteria:**
+- `make dr-status` on hub shows all phases green
+- `make spoke-status` on spoke shows CR restore completed
+- No manual sync or YAML workarounds required during onboarding
+
+**Status:** Not Started
 
 ---
 

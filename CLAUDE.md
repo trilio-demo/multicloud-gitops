@@ -1,5 +1,11 @@
 # CLAUDE.md — Trilio GitOps Pattern
 
+## Session Continuity
+
+This user closes VSCode and CC CLI frequently and **never rejoins sessions**. Every new conversation starts cold. When you detect a session-end signal, sync memory before responding with a farewell.
+
+**Session-end phrases:** "that's it for the day", "good session, nite", "stopping point", or any clear sign-off.
+
 ## What This Repo Is
 Red Hat Validated Pattern for Disaster Recovery with Trilio on OpenShift.
 - **Source of truth for requirements:** `PRD.md`
