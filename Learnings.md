@@ -1555,3 +1555,178 @@ In Trilio 5.2.x, `hookConfig` was not supported (or unreliable) for ConsistentSe
 In Trilio 5.3.x, `hookConfig` works for ConsistentSet restores. The `imperative-cr-restore.yaml` playbook uses the same hookConfig pattern as `imperative-restore-standard.yaml` — it checks for the `wordpress-restore-hook` Hook CR and includes it if present. The Hook CR has `ignoreFailure: true` so a hook failure does not block the restore.
 
 The `dr-restore.yaml` manual playbook still uses direct MySQL exec for ConsistentSet restores as a fallback; that can be unified with hookConfig in a future cleanup.
+
+## Deleting the Pattern CR Cascades Wider Than `offboard-hub.yaml` — It Removes ACM, Vault and ESO
+
+`offboard-hub.yaml` deliberately preserves hub infrastructure: ACM, Vault, ESO and OpenShift GitOps
+are listed under "What is NOT removed" in its header. **Deleting the Pattern CR does not honour that
+boundary.**
+
+The Pattern CR carries a `foregroundDeletePattern` finalizer. When the CR is deleted, the Validated
+Patterns operator runs its own teardown, which cascade-deletes **every** child application — not just
+the pattern-specific ones. On DC6 that meant `acm`, `vault` and `golang-external-secrets` went too,
+taking the MultiClusterHub, the Vault StatefulSet, and the Vault PVC/PV with them.
+
+**Consequence:** if you want the hub infrastructure preserved, run `offboard-hub.yaml` and leave the
+Pattern CR alone. Deleting the Pattern CR is the right move only when you want the pattern gone
+completely, e.g. before redeploying from a different branch.
+
+Do not reason about Pattern CR deletion by reading the playbook — the two teardown paths have
+different scopes.
+
+## Pattern CR Deletion Stalls on an Unreachable Spoke — `DeleteSpokeChildApps` Never Completes
+
+The operator's finalizer runs in ordered phases. The first, `DeleteSpokeChildApps`, verifies that
+child apps are gone from every spoke before proceeding:
+
+```
+Deletion phase: DeleteSpokeChildApps - checking if all child applications are gone from spoke
+Reconcile step "finalize" failed: error checking child applications: spoke cluster apps still
+exist: [dallas-multicloudops-group-one/{trilio-secrets,golang-external-secrets,trilio-operand,
+wordpress-restore} in dr-cluster]
+```
+
+If the spoke has been decommissioned, that check can never succeed and the finalizer requeues
+forever. Note the app namespace (`<branch>-<pattern>-<clusterGroup>`) does not exist on the hub, so
+`oc get applications.argoproj.io -A` shows nothing — the apps are only visible through ACM.
+
+**Fix:** delete the spoke's `ManagedCluster` on the hub. Once ACM no longer knows about the cluster,
+the phase passes and the finalizer advances to `DeleteHubChildApps`.
+
+Deleting a `ManagedCluster` whose spoke is unreachable resolved all six ACM cleanup finalizers on its
+own — no force-strip was needed, despite the expectation that `manifestwork-cleanup` would hang.
+
+## ACM Uninstall Stalls on `addon-pre-delete` — One Finalizer Blocks a Five-Link Chain
+
+Removing the `acm` child app triggers a MultiClusterHub uninstall that can wedge. The dependency
+chain, top to bottom:
+
+```
+Pattern CR (DeleteHubChildApps)
+  └── acm Application (foreground finalizer)
+        └── MultiClusterHub        "Finalizing: MCE has not yet been terminated"
+              └── MultiClusterEngine  "waiting for 'local-cluster' ManagedCluster to be terminated"
+                    └── ManagedCluster/local-cluster
+                          └── managedclusteraddon/config-policy-controller
+                                └── addon.open-cluster-management.io/addon-pre-delete
+```
+
+The `addon-pre-delete` hook needs an addon agent that the uninstall has already torn down, so it
+never completes. Everything above it waits indefinitely — MCH sits in `Uninstalling` with only its
+own operator pods left running, which reads as progress but is not.
+
+**Fix — strip the one finalizer at the bottom:**
+
+```bash
+oc patch managedclusteraddon config-policy-controller -n local-cluster \
+  --type=merge -p '{"metadata":{"finalizers":null}}'
+```
+
+The whole chain then unwound in about two minutes: local-cluster → MCE → MCH → `acm` app → Pattern CR.
+
+**Diagnostic tip:** read the MCE operator log, not the MCH log. MCH only reports "MCE has not yet
+been terminated"; MCE names the actual blocking resource.
+
+## `oc get applications` Resolves to ACM's CRD, Not ArgoCD's — Always Qualify
+
+Same trap already documented for Trilio CRDs. On a hub with ACM installed, both
+`applications.app.k8s.io` (ACM) and `applications.argoproj.io` (ArgoCD) exist, and the bare plural
+resolves to ACM's. During the DC6 teardown this made a fully healthy 8-application deployment look
+like it had zero ArgoCD Applications, which nearly led to the wrong conclusion about cluster state.
+
+```bash
+oc get applications.argoproj.io -A     # correct
+oc get applications -A                 # ACM's CRD — silently wrong, no error
+```
+
+## `offboard-hub.yaml` Defects Found During the DC6 Teardown
+
+Three issues surfaced running the playbook against a real cluster:
+
+1. **Preflight hard-fails when the `ManagedCluster` CRD is absent.** The task
+   `Check for active secondary spoke clusters` shells out to `kubectl get managedcluster` with no
+   `failed_when: false` or `ignore_errors`. Once ACM is removed the CRD is gone, `kubectl` returns
+   rc=1, and the play aborts at task 1. Workaround: `--skip-tags preflight`.
+2. **No ManagedCluster finalizer force-strip.** The header promises finalizer force-patching for
+   Applications (step 4) and Trilio CRs (step 5), but step 1 deletes ManagedClusters with plain
+   `state: absent`. It happened not to bite on DC6, but a spoke that holds its finalizers would
+   stall the play.
+3. **`pattern_namespaces` omits the ArgoCD namespace.** The list covers `wordpress-restore`,
+   `wordpress`, `trilio-system`, `imperative` — but not `<branch>-<pattern>-hub`, which holds the
+   pattern's ArgoCD instance. A playbook-only teardown leaves both orphaned.
+
+Also worth knowing: because steps 3 and 4 use `ignore_errors`, wrong values for `hub_app_of_apps` /
+`hub_child_app_namespace` fail **silently** and leave ArgoCD live through the operator removal —
+exactly the race the playbook header warns about. Always pass the real namespace names:
+
+```bash
+ansible-playbook ansible/playbooks/offboard-hub.yaml \
+  --skip-tags preflight \
+  -e hub_app_of_apps=<branch>-<pattern>-hub \
+  -e hub_child_app_namespace=<branch>-<pattern>-hub \
+  -e clean_vault=false
+```
+
+## Removing ODF: Let the Finalizers Run — Stripping Them Orphans the Backing vSphere VMDKs
+
+On DC6 the ODF OSD device sets and mons were backed by `thin-csi` PVCs — i.e. **vSphere VMDKs**, not
+local disks. 3 × 512Gi OSD devicesets plus 3 × 50Gi mons = 1,686Gi of VMDKs in the host VM
+infrastructure. `thin-csi` reclaimPolicy is `Delete`, so a graceful teardown makes the vSphere CSI
+driver delete those VMDKs automatically.
+
+**The instinct to pre-emptively strip finalizers is exactly wrong here.** A survey before deletion
+found 15 ODF CRs each carrying exactly one finalizer — and every one was a live operator finalizer,
+not a stale one:
+
+```
+storagesystem.odf.openshift.io       cephfilesystem.ceph.rook.io
+storagecluster.ocs.openshift.io      cephfilesystemsubvolumegroup.ceph.rook.io
+cephcluster.ceph.rook.io             cephobjectstore.ceph.rook.io
+cephblockpool.ceph.rook.io (x2)      cephobjectstoreuser.ceph.rook.io (x3)
+noobaa.io/graceful_finalizer         noobaa.io/finalizer (x2)
+```
+
+Those finalizers *are* the cleanup. Likewise the PV finalizers
+`external-provisioner.volume.kubernetes.io/finalizer` and
+`external-attacher/csi-vsphere-vmware-com` are what drive the detach-and-delete in vSphere. Removing
+any of them deletes the Kubernetes object while leaving the VMDK behind — the precise stale-volume
+outcome you are trying to avoid.
+
+**Nothing needed force-removing.** The full teardown completed with zero finalizer intervention.
+
+### Correct order
+
+1. Confirm the uninstall annotations on the StorageCluster:
+   `uninstall.ocs.openshift.io/cleanup-policy: delete` and `uninstall.ocs.openshift.io/mode: graceful`
+2. Delete consuming PVCs **outside** `openshift-storage` first — `mode: graceful` blocks while any
+   exist. Check for pod consumers before deleting.
+3. Delete the StorageSystem. The whole CR tree (StorageCluster → CephCluster → block pools,
+   filesystems, object stores, noobaa) collapses in ~15s via owner references.
+4. Wait for the PVs. **Do not intervene during this window** — see below.
+
+### The `Released` window is normal — do not panic-strip during it
+
+After the PVCs go, the PVs sit in `Released` with `reclaim=Delete`, no `deletionTimestamp`, and their
+`claimRef` still populated. That is the CSI `DeleteVolume` call being in flight, not a stall. On DC6
+it lasted ~60s, extended because a `vmware-vsphere-csi-driver-controller` pod restarted at the moment
+of deletion and dropped its work queue. It recovered on retry and the csi-provisioner logged
+`DeleteVolume` for all six handles by name, then removed the PV objects.
+
+Force-stripping the PV finalizers during that minute would have orphaned 1.65 TiB in vSphere.
+
+**Confirm before intervening:** `oc get volumeattachment` should be empty (volumes detached), and
+`oc logs -n openshift-cluster-csi-drivers -l app=vmware-vsphere-csi-driver-controller -c csi-provisioner`
+should show delete activity. If attachments are empty and the provisioner is logging, wait.
+
+That CSI controller was already unstable — one pod at 12 restarts, its peer at 1028 over 175 days.
+Worth checking controller restart counts before starting a storage teardown on this platform.
+
+### Side effects to expect
+
+- All four ODF storage classes (`ocs-storagecluster-ceph-rbd`, `-cephfs`, `-ceph-rgw`,
+  `openshift-storage.noobaa.io`) delete themselves. Only the platform's `thin-csi` remains.
+- **The default StorageClass disappears.** `ocs-storagecluster-ceph-rbd` held the default flag;
+  `thin-csi` is not marked default. Anything provisioning before ODF is reinstalled will fail to
+  bind. Set a default explicitly, or reinstall ODF first.
+- The ODF operators and the `openshift-storage` namespace survive — the StorageSystem deletion does
+  not touch them.

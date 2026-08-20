@@ -108,7 +108,7 @@ Each item maps to a deliverable in the Implementation Matrix below.
 | 14 | Remove multicloud-gitops upstream overhead (hello-world, config-demo, RHDP-specific workflows where appropriate); retain or comment items with future value; document every decision | P1 — Done |
 | 15 | Rename pattern and cluster groups: `multicloud-gitops` → `trilio-continuous-restore`; `group-one` → `secondary`; `values-group-one.yaml` → `values-secondary.yaml`; update all references in values files, playbooks, Makefile, offboard scripts, tests, and metadata | P1 — Done |
 | 16 | Publish clean pattern to new public GitHub repo `trilio-continuous-restore`: push `dallas` branch as `main`; update repo URLs in metadata; confirm no lab-specific config or internal files in public repo | P1 — Done |
-| 17 | Teardown clusters deployed from `dallas` branch: offboard spoke then hub; validate offboard playbooks work correctly with Req 15 renamed namespaces and cluster group labels | P0 — Not Started |
+| 17 | Teardown clusters deployed from `dallas` branch: offboard spoke then hub; validate offboard playbooks work correctly with Req 15 renamed namespaces and cluster group labels | P0 — Done |
 | 18 | Fresh deployment validation from `main` branch: redeploy hub + spoke from `main`, validate all Req 15 renames work on a live cluster, run full E2E imperative automation to green | P0 — Not Started |
 
 ---
@@ -525,24 +525,53 @@ ArgoCD retries indefinitely but never self-recovers. Observed: attempt #7+ with 
 
 The active hub and spoke clusters were deployed using the `dallas` branch. Before a fresh `main`-branch deployment (Req 18), they must be cleanly torn down.
 
-**Context:** The `dallas`-branch deployment used the old cluster group name `group-one`. After Req 15, the renamed values use `secondary`. ArgoCD namespace names follow the pattern `<gitBranch>-<pattern>-<clusterGroup>`, so the live ArgoCD namespaces are currently:
-- Hub: `dallas-trilio-continuous-restore-hub`
-- Spoke: `dallas-trilio-continuous-restore-secondary`
+**Context (as executed):** The live deployment predated the Req 15 rename entirely. The actual
+names were pattern `dallas-multicloudops`, hub ArgoCD namespace `dallas-multicloudops-hub`, spoke
+namespace `dallas-multicloudops-group-one` — not the `dallas-trilio-continuous-restore-*` names
+originally assumed here. The offboard playbooks default to `main-trilio-continuous-restore-*`, so
+both namespace vars had to be overridden.
 
-The offboard playbooks reference these namespace names — verify they are parameterized correctly for the live cluster state before running.
+**What actually happened (2026-08-19):**
 
-**Steps:**
-1. Save Vault `root_token` and `unseal_keys` from the `imperative` namespace **before** offboard — the `vaultkeys` Secret is deleted with the namespace
-2. Offboard spoke first: `make offboard-spoke CLUSTER=<name>` (spoke context)
-3. Offboard hub: `make offboard-hub` (hub context)
-4. Confirm hub is left in a clean state: no VP namespaces, no Trilio resources, no ArgoCD Applications for this pattern
-5. Confirm spoke is disassociated from ACM and functional as a standalone cluster
+DC12 (spoke) was reclaimed by the lab team before teardown — API unreachable, host not answering
+ICMP. No spoke-side offboard was possible or needed; `make offboard-spoke` was skipped entirely.
 
-**Acceptance criteria:**
-- Both clusters pass post-offboard cleanup checks (no stuck finalizers, no orphaned namespaces)
-- Offboard playbooks complete without requiring manual intervention for the renamed namespaces
+DC6 (hub) was torn down in this order:
+1. Deleted Pattern CR `dallas-multicloudops` — **this cascades far wider than the playbook does**
+   (see Learnings.md); it removed ACM, Vault and ESO along with the Trilio/WordPress apps
+2. Unlabelled and deleted ManagedCluster `dr-cluster` — required to get the Pattern CR finalizer
+   past its `DeleteSpokeChildApps` phase, which was looping on unverifiable spoke apps
+3. Stripped `addon.open-cluster-management.io/addon-pre-delete` from
+   `managedclusteraddon/config-policy-controller` in `local-cluster` — unblocked the
+   local-cluster → MCE → MCH → `acm` app → Pattern CR chain
+4. Ran `offboard-hub.yaml` with `--skip-tags preflight` and namespace overrides
+   (`ok=20 changed=8 failed=0`) — cleared two stuck Trilio CR finalizers, the webhooks,
+   and all 16 Trilio CRDs
 
-**Status:** Not Started
+**Verified end state:** no Pattern CRs, no ArgoCD Applications, 0 Trilio CRDs, all pattern
+namespaces gone, nothing stuck Terminating, Vault namespace + PVC + PV fully removed with no
+orphaned PVs. `patterns-operator` v0.0.65, `openshift-gitops-operator` v1.18.3 and ODF
+`ocs-storagecluster` retained and healthy.
+
+**Deliberately left in place:** 66 ACM/MCE/Hive CRDs (20 `hive.openshift.io`,
+9 `apps.open-cluster-management.io`, 4 `cluster.open-cluster-management.io`, plus
+MCE/observability/submariner) and an empty `hive` namespace. Both ACM and MCE CSVs are gone; only
+CRDs remain. A fresh `main` deploy reinstalls ACM and reconciles them.
+
+**Vault keys were already lost** before teardown began — `vaultkeys` was absent from `imperative`
+and no `vault.init` existed on local disk. Vault was running unsealed only because vault-0 had not
+restarted. Moot in the end, since the namespace and PVC were removed.
+
+**Playbook defects found (fix before Req 18):**
+- Preflight task `Check for active secondary spoke clusters` has no `failed_when` /
+  `ignore_errors`, so it hard-fails once the `ManagedCluster` CRD is absent — required
+  `--skip-tags preflight`
+- No ManagedCluster finalizer force-strip in step 1, despite the header promising that treatment
+  for Applications and Trilio CRs
+- `pattern_namespaces` omits the ArgoCD namespace (`<branch>-<pattern>-hub`); the operator cascade
+  caught it this time, but a playbook-only teardown would orphan it and its ArgoCD instance
+
+**Status:** Done — 2026-08-19
 
 ---
 
